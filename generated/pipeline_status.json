@@ -8,13 +8,13 @@
   "input_files": {
     "teacher": {
       "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/teachers_latest.xlsx",
-      "modified_at": "2026-03-27T18:25:38",
-      "size_bytes": 5662
+      "modified_at": "2026-03-27T21:42:00",
+      "size_bytes": 9216
     },
     "student": {
       "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/students_latest.xlsx",
-      "modified_at": "2026-03-27T18:25:38",
-      "size_bytes": 7356
+      "modified_at": "2026-03-27T21:42:00",
+      "size_bytes": 10705
     }
   },
   "outputs": {
