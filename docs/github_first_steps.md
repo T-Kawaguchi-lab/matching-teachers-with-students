@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # GitHub 最初の設定手順
 
 ## 使うリポジトリ
@@ -21,7 +21,7 @@ git push -u origin main
 
 ## 2回目以降
 Excel 更新 → bat で再計算 → `push_updates.bat`
-=======
+
 # GitHub の最初の設定
 
 ## 1. この zip を展開
@@ -47,4 +47,3 @@ push 後に `Actions` タブで `Process matching inputs and refresh Streamlit o
 
 どちらも **Excel選択 → commit → push** まで自動です。
 GitHub Actions がその push を拾って加工と推薦結果生成を行います。
->>>>>>> 5379900 (Initial commit)
