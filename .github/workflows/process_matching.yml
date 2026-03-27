@@ -1,0 +1,56 @@
+name: Process matching inputs and refresh Streamlit outputs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'incoming/**'
+      - 'data_sources/**'
+      - 'config/**'
+      - 'committee_matching/**'
+      - 'app/**'
+      - 'streamlit_app.py'
+      - 'requirements.txt'
+      - '.github/workflows/process_matching.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  process:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run enrichment and scoring
+        run: python -m committee_matching.pipeline --mode auto --skip-git-add
+
+      - name: Commit generated outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add generated
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+          else
+            git commit -m "Update generated matching outputs"
+            git push
+          fi

@@ -16,6 +16,7 @@ STATUS_JSON = GENERATED_DIR / 'pipeline_status.json'
 
 st.set_page_config(page_title='修論 指導教員マッチング', layout='wide')
 st.title('修論テーマ × 教員マッチング UI')
+<<<<<<< HEAD
 st.caption('学生の修論テーマ、教員の TRIOS・過去修論テーマ・研究分野を使って主指導 1 名＋副指導 2 名を推薦します。')
 
 if not SCORES_CSV.exists():
@@ -26,6 +27,9 @@ scores = pd.read_csv(SCORES_CSV)
 committee_df = pd.read_excel(COMMITTEE_XLSX)
 teachers_df = pd.read_excel(TEACHERS_XLSX)
 students_df = pd.read_excel(STUDENTS_XLSX)
+=======
+st.caption('GitHub Actions が生成した最新の教員・学生データと推薦結果を表示します。')
+>>>>>>> 5379900 (Initial commit)
 
 status = {}
 if STATUS_JSON.exists():
@@ -35,9 +39,26 @@ if STATUS_JSON.exists():
         status = {}
 
 if status:
+<<<<<<< HEAD
     with st.expander('最新実行情報'):
         st.json(status)
 
+=======
+    with st.expander('最新実行情報', expanded=True):
+        st.json(status)
+
+if not SCORES_CSV.exists():
+    st.warning('まだ推薦結果がありません。教員入力と学生入力の両方が GitHub に push されると、GitHub Actions が自動で推薦結果を生成します。')
+    if status:
+        st.info(status.get('message', '現在は待機中です。'))
+    st.stop()
+
+scores = pd.read_csv(SCORES_CSV)
+committee_df = pd.read_excel(COMMITTEE_XLSX)
+teachers_df = pd.read_excel(TEACHERS_XLSX)
+students_df = pd.read_excel(STUDENTS_XLSX)
+
+>>>>>>> 5379900 (Initial commit)
 student_names = sorted(scores['student_name'].dropna().unique().tolist())
 selected_student = st.sidebar.selectbox('学生を選択', student_names)
 rank_limit = st.sidebar.slider('表示件数', 3, 20, 10)

@@ -1,10 +1,19 @@
 {
+<<<<<<< HEAD
   "embedding_model": "intfloat/multilingual-e5-large",
   "top_k_fields": 5,
   "field_similarity_weight": 0.25,
   "theme_similarity_weight": 0.45,
   "lexical_similarity_weight": 0.20,
   "exact_field_bonus_weight": 0.10,
+=======
+  "embedding_model": "intfloat/multilingual-e5-base",
+  "top_k_fields": 5,
+  "field_similarity_weight": 0.25,
+  "theme_similarity_weight": 0.45,
+  "lexical_similarity_weight": 0.2,
+  "exact_field_bonus_weight": 0.1,
+>>>>>>> 5379900 (Initial commit)
   "exact_field_bonus_per_match": 0.03,
   "max_exact_field_bonus": 0.12,
   "cohort_zscore_weight": 0.15,

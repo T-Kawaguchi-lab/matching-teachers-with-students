@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # GitHub / Streamlit Cloud の差し替え箇所
 
 ## 1. GitHub
@@ -20,6 +21,16 @@
 
 ## 3. 置き換える場所が分かるようにしている記号
 未設定の箇所は次のようにしています。
+=======
+# 今回の配備方針
+
+今回は Google Cloud Run には deploy しません。
+
+- 計算: GitHub Actions
+- 表示: Streamlit Community Cloud
+
+後で Cloud Run に移したくなったら、次を差し替えます。
+>>>>>>> 5379900 (Initial commit)
 
 ```text
 ！！！！！！！！！！
@@ -27,4 +38,10 @@
 ！！！！！！！！！！
 ```
 
+<<<<<<< HEAD
 この文字列で検索すれば、差し替え箇所をすぐ見つけられます。
+=======
+- `.env` の `APP_BASE_URL`
+- `app/Dockerfile`
+- GitHub Actions の deploy step
+>>>>>>> 5379900 (Initial commit)
