@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -261,31 +260,6 @@ def normalize_weights(weight_dict: dict[str, float]) -> dict[str, float]:
     return {k: v / total for k, v in clipped.items()}
 
 
-def rowwise_minmax_zscore_like(series: pd.Series) -> pd.Series:
-    """
-    zip内ロジックの rowwise_zscore(base_score) 相当の1次元版。
-    1人の学生に対する全教員スコア列に対して、
-    zscore -> minmax(0..1) をかける。
-    """
-    s = pd.to_numeric(series, errors="coerce").fillna(0.0).astype(float)
-    if len(s) == 0:
-        return s
-
-    mu = float(s.mean())
-    sigma = float(s.std(ddof=0))
-    if sigma == 0:
-        z = pd.Series([0.0] * len(s), index=s.index, dtype="float64")
-    else:
-        z = (s - mu) / sigma
-
-    z_min = float(z.min())
-    z_max = float(z.max())
-    denom = z_max - z_min
-    if denom == 0:
-        return pd.Series([0.0] * len(s), index=s.index, dtype="float64")
-    return (z - z_min) / denom
-
-
 def normalize_text_token(text: str) -> str:
     return " ".join(safe_str(text).strip().lower().split())
 
@@ -306,7 +280,6 @@ def parse_listlike(value: Any) -> list[str]:
     if not s:
         return []
 
-    # 文字列化された list に対応
     if s.startswith("[") and s.endswith("]"):
         try:
             parsed = json.loads(s.replace("'", '"'))
@@ -315,7 +288,6 @@ def parse_listlike(value: Any) -> list[str]:
         except Exception:
             pass
 
-    # よくある区切りに対応
     seps = [" ; ", ";", "、", ",", "\n", " / ", "/"]
     tmp = [s]
     for sep in seps:
@@ -440,7 +412,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("重み変更")
-    st.caption("theme / field / lexical のみを重み変更します。一致ボーナスは重み対象に含めず、そのまま加点します。")
+    st.caption("theme / field のみを重み変更します。一致ボーナスは重み対象に含めず、そのまま加点します。")
 
     weight_theme = st.number_input(
         "テーマ類似重み (theme_score)",
@@ -455,22 +427,6 @@ with st.sidebar:
         min_value=0.0,
         max_value=10.0,
         value=0.25,
-        step=0.05,
-        format="%.2f",
-    )
-    weight_lexical = st.number_input(
-        "語句スコア重み (lexical_score)",
-        min_value=0.0,
-        max_value=10.0,
-        value=0.20,
-        step=0.05,
-        format="%.2f",
-    )
-    cohort_zscore_weight = st.number_input(
-        "cohort補正重み (calibrated_score)",
-        min_value=0.0,
-        max_value=10.0,
-        value=0.15,
         step=0.05,
         format="%.2f",
     )
@@ -508,42 +464,23 @@ committee_info = committee_info_df.iloc[0]
 weights_raw = {
     "theme_score": float(weight_theme),
     "field_score": float(weight_field),
-    "lexical_score": float(weight_lexical),
 }
 weights_norm = normalize_weights(weights_raw)
 
 student_scores["theme_score_f"] = ensure_numeric(student_scores, "theme_score")
 student_scores["field_score_f"] = ensure_numeric(student_scores, "field_score")
-student_scores["lexical_score_f"] = ensure_numeric(student_scores, "lexical_score")
 student_scores["exact_bonus_f"] = ensure_numeric(student_scores, "exact_bonus")
 
-# 一致ボーナスは重みに含めず、そのまま加点
-student_scores["base_score_reweighted"] = (
+student_scores["total_score_reweighted"] = (
     student_scores["theme_score_f"] * weights_norm["theme_score"]
     + student_scores["field_score_f"] * weights_norm["field_score"]
-    + student_scores["lexical_score_f"] * weights_norm["lexical_score"]
     + student_scores["exact_bonus_f"]
-)
-
-# zip内の rowwise_zscore -> minmax と近い形
-student_scores["calibrated_score_reweighted"] = rowwise_minmax_zscore_like(
-    student_scores["base_score_reweighted"]
-)
-
-student_scores["total_score_reweighted"] = (
-    student_scores["base_score_reweighted"]
-    + float(cohort_zscore_weight) * student_scores["calibrated_score_reweighted"]
 )
 
 if use_reweighted_total:
     student_scores["display_total_score"] = student_scores["total_score_reweighted"]
-    student_scores["display_calibrated_score"] = student_scores["calibrated_score_reweighted"]
 else:
     student_scores["display_total_score"] = ensure_numeric(student_scores, "total_score")
-    if "calibrated_score" in student_scores.columns:
-        student_scores["display_calibrated_score"] = ensure_numeric(student_scores, "calibrated_score")
-    else:
-        student_scores["display_calibrated_score"] = 0.0
 
 student_scores = student_scores.sort_values(
     by=["display_total_score", score_teacher_col] if score_teacher_col in student_scores.columns else ["display_total_score"],
@@ -604,12 +541,10 @@ st.markdown('<div class="weight-box">', unsafe_allow_html=True)
 st.markdown('<div class="section-title" style="margin-top:0;">現在の重み / Current Weights</div>', unsafe_allow_html=True)
 st.write(
     f"theme = **{weights_norm['theme_score']:.3f}** / "
-    f"field = **{weights_norm['field_score']:.3f}** / "
-    f"lexical = **{weights_norm['lexical_score']:.3f}**"
+    f"field = **{weights_norm['field_score']:.3f}**"
 )
 st.write("一致ボーナスは **重み付けせずにそのまま加点** します。")
-st.write(f"cohort補正重み = **{float(cohort_zscore_weight):.3f}**")
-st.caption("再計算式: weighted(theme, field, lexical) + exact_bonus + cohort補正")
+st.caption("再計算式: weighted(theme, field) + exact_bonus")
 st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -654,9 +589,7 @@ st.markdown(
 )
 
 display_df = student_scores.copy()
-
 display_df["total_score"] = display_df["display_total_score"]
-display_df["calibrated_score"] = display_df["display_calibrated_score"]
 
 display_cols = [
     "display_rank",
@@ -664,11 +597,9 @@ display_cols = [
     "total_score",
     "theme_score",
     "field_score",
-    "lexical_score",
     "exact_bonus",
     "matched_count",
     "matched_words",
-    "calibrated_score",
 ]
 existing_cols = [c for c in display_cols if c in display_df.columns]
 
@@ -683,16 +614,12 @@ if "theme_score" in existing_cols:
     column_config["theme_score"] = st.column_config.NumberColumn("テーマ類似", format="%.4f")
 if "field_score" in existing_cols:
     column_config["field_score"] = st.column_config.NumberColumn("分野類似", format="%.4f")
-if "lexical_score" in existing_cols:
-    column_config["lexical_score"] = st.column_config.NumberColumn("語句スコア", format="%.4f")
 if "exact_bonus" in existing_cols:
     column_config["exact_bonus"] = st.column_config.NumberColumn("一致ボーナス", format="%.4f")
 if "matched_count" in existing_cols:
     column_config["matched_count"] = st.column_config.NumberColumn("一致数", format="%d")
 if "matched_words" in existing_cols:
     column_config["matched_words"] = st.column_config.TextColumn("一致ワード", width="large")
-if "calibrated_score" in existing_cols:
-    column_config["calibrated_score"] = st.column_config.NumberColumn("cohort補正値", format="%.4f")
 
 st.dataframe(
     display_df[existing_cols],
@@ -764,7 +691,6 @@ with detail_right:
         render_field("総合スコア", f'{float(selected_teacher_score["display_total_score"]):.4f}')
         render_field("テーマ類似", f'{float(selected_teacher_score["theme_score_f"]):.4f}')
         render_field("分野類似", f'{float(selected_teacher_score["field_score_f"]):.4f}')
-        render_field("語句スコア", f'{float(selected_teacher_score["lexical_score_f"]):.4f}')
         render_field("一致ボーナス", f'{float(selected_teacher_score["exact_bonus_f"]):.4f}')
         render_field("一致ワード", " / ".join(matched_words_selected) if matched_words_selected else "なし")
     else:
