@@ -16,20 +16,7 @@ STATUS_JSON = GENERATED_DIR / 'pipeline_status.json'
 
 st.set_page_config(page_title='修論 指導教員マッチング', layout='wide')
 st.title('修論テーマ × 教員マッチング UI')
-<<<<<<< HEAD
-st.caption('学生の修論テーマ、教員の TRIOS・過去修論テーマ・研究分野を使って主指導 1 名＋副指導 2 名を推薦します。')
-
-if not SCORES_CSV.exists():
-    st.warning('まだ generated/student_teacher_scores_long.csv がありません。先に select_teacher_excel.bat または select_student_excel.bat を実行してください。')
-    st.stop()
-
-scores = pd.read_csv(SCORES_CSV)
-committee_df = pd.read_excel(COMMITTEE_XLSX)
-teachers_df = pd.read_excel(TEACHERS_XLSX)
-students_df = pd.read_excel(STUDENTS_XLSX)
-=======
 st.caption('GitHub Actions が生成した最新の教員・学生データと推薦結果を表示します。')
->>>>>>> 5379900 (Initial commit)
 
 status = {}
 if STATUS_JSON.exists():
@@ -39,11 +26,6 @@ if STATUS_JSON.exists():
         status = {}
 
 if status:
-<<<<<<< HEAD
-    with st.expander('最新実行情報'):
-        st.json(status)
-
-=======
     with st.expander('最新実行情報', expanded=True):
         st.json(status)
 
@@ -53,26 +35,49 @@ if not SCORES_CSV.exists():
         st.info(status.get('message', '現在は待機中です。'))
     st.stop()
 
+committee_exists = COMMITTEE_XLSX.exists()
+teachers_exists = TEACHERS_XLSX.exists()
+students_exists = STUDENTS_XLSX.exists()
+
+if not (committee_exists and teachers_exists and students_exists):
+    st.error('generated フォルダ内の必要ファイルが不足しています。GitHub Actions の完了を確認してください。')
+    st.stop()
+
 scores = pd.read_csv(SCORES_CSV)
 committee_df = pd.read_excel(COMMITTEE_XLSX)
 teachers_df = pd.read_excel(TEACHERS_XLSX)
 students_df = pd.read_excel(STUDENTS_XLSX)
 
->>>>>>> 5379900 (Initial commit)
 student_names = sorted(scores['student_name'].dropna().unique().tolist())
+if not student_names:
+    st.warning('推薦対象の学生データがまだありません。')
+    st.stop()
+
 selected_student = st.sidebar.selectbox('学生を選択', student_names)
 rank_limit = st.sidebar.slider('表示件数', 3, 20, 10)
 
 student_scores = scores[scores['student_name'] == selected_student].sort_values('rank').head(rank_limit).copy()
-student_info = students_df[students_df['student_name'] == selected_student].iloc[0]
-committee_info = committee_df[committee_df['student_name'] == selected_student].iloc[0]
+if student_scores.empty:
+    st.warning('この学生の候補データがありません。')
+    st.stop()
+
+student_info_df = students_df[students_df['student_name'] == selected_student]
+committee_info_df = committee_df[committee_df['student_name'] == selected_student]
+
+if student_info_df.empty or committee_info_df.empty:
+    st.warning('学生情報または委員会情報が見つかりません。')
+    st.stop()
+
+student_info = student_info_df.iloc[0]
+committee_info = committee_info_df.iloc[0]
 
 col1, col2 = st.columns([1.3, 1])
+
 with col1:
     st.subheader('学生情報')
     st.write(f"**学生名**: {student_info['student_name']}")
     st.write(f"**修論テーマ**: {student_info['thesis_title']}")
-    st.write(f"**研究分野候補**: {student_info['research_fields']}")
+    st.write(f"**研究分野候補**: {student_info.get('research_fields', '')}")
 
     st.subheader('推薦された委員会')
     st.write(f"**主指導教員**: {committee_info['main_advisor']}")
@@ -81,24 +86,39 @@ with col1:
 
 with col2:
     st.subheader('上位候補ランキング')
+    display_cols = [
+        'rank',
+        'teacher_name',
+        'total_score',
+        'theme_score',
+        'field_score',
+        'lexical_score',
+        'exact_bonus',
+    ]
+    existing_cols = [c for c in display_cols if c in student_scores.columns]
     st.dataframe(
-        student_scores[[
-            'rank', 'teacher_name', 'total_score', 'theme_score', 'field_score', 'lexical_score', 'exact_bonus'
-        ]],
+        student_scores[existing_cols],
         use_container_width=True,
         hide_index=True,
     )
 
 st.subheader('候補教員の詳細')
 selected_teacher = st.selectbox('教員を選択', student_scores['teacher_name'].tolist())
-teacher_info = teachers_df[teachers_df['teacher_name'] == selected_teacher].iloc[0]
+teacher_info_df = teachers_df[teachers_df['teacher_name'] == selected_teacher]
+
+if teacher_info_df.empty:
+    st.warning('教員詳細が見つかりません。')
+    st.stop()
+
+teacher_info = teacher_info_df.iloc[0]
 
 left, right = st.columns(2)
 with left:
-    st.write(f"**教員名**: {teacher_info['teacher_name']}")
+    st.write(f"**教員名**: {teacher_info.get('teacher_name', '')}")
     st.write(f"**所属**: {teacher_info.get('department', '')}")
     st.write(f"**職名**: {teacher_info.get('position', '')}")
     st.write(f"**研究分野候補**: {teacher_info.get('research_fields', '')}")
+
 with right:
     st.write(f"**TRIOS URL**: {teacher_info.get('trios_url', '')}")
     st.write(f"**TRIOS 取得状態**: {teacher_info.get('trios_status', '')}")

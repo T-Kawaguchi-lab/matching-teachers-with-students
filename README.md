@@ -9,16 +9,6 @@
 を使って、**主指導教員 1 名 + 副指導教員 2 名** を推薦するプロジェクトです。
 
 ## 今回の版で変えたこと
-<<<<<<< HEAD
-- `select_teacher_excel.bat` または `select_student_excel.bat` の**どちらか片方だけ更新**しても実行できます。
-- 更新していない側は、`incoming/` に保存されている**前回の最新 Excel** をそのまま再利用します。
-- `run_pipeline.bat` は使わない前提に整理しました。
-- 類似度計算は bat から **`committee_matching.pipeline` を直接実行**します。
-- GitHub は次のリポジトリを使う前提に更新しました。  
-  `https://github.com/T-Kawaguchi-lab/matching-teachers-with-students.git`
-- まずは **Streamlit Community Cloud** で結果閲覧する前提にしました。
-- PDF から抽出したサンプル入力を `sample_inputs/` に追加しました。
-=======
 - `select_teacher_excel.bat` / `select_student_excel.bat` が **Excel選択 → GitHubへcommit/push → GitHub Actions起動** までを一気に行います。
 - GitHub Actions が、更新された Excel を使って **TRIOS 情報追加・研究分野推定・加工済み Excel 保存** を行います。
 - もう片方の入力 Excel が既にリポジトリ内にあれば、そのまま **類似度計算まで自動実行** します。
@@ -26,77 +16,39 @@
 - `run_ui.bat` は **Streamlit Cloud の公開URLを開く** 方式を優先し、URL未設定時のみローカル起動にフォールバックします。
 - GitHub リポジトリは次を前提に設定済みです。  
   `https://github.com/T-Kawaguchi-lab/matching-teachers-with-students.git`
->>>>>>> 5379900 (Initial commit)
 
 ## 最初にやること
 ### 1. zip を展開
 任意のフォルダに展開してください。
 
-<<<<<<< HEAD
 ### 2. 初回セットアップ
 `setup_first_time.bat` を実行してください。  
 Python 仮想環境 `.venv` を作成し、必要ライブラリを入れます。
 
 ### 3. GitHub の最初の push
-この zip を展開したフォルダで、次のどちらかを行います。
-
-#### 方法 A: bat でまとめて実行
-`setup_github_first_push.bat`
-
-#### 方法 B: 手動で実行
-```bash
-git init
-git branch -M main
-git remote add origin https://github.com/T-Kawaguchi-lab/matching-teachers-with-students.git
-git add .
-git commit -m "Initial commit"
-git push -u origin main
-```
-=======
-### 2. GitHub の最初の push
 まだリポジトリが空なら、展開したフォルダで `setup_github_first_push.bat` を実行します。
 
-### 3. Streamlit Community Cloud を作成
+### 4. Streamlit Community Cloud を作成
 - GitHub 連携後、このリポジトリを選ぶ
 - Main file path は `streamlit_app.py`
 - App URL が決まったら `.env` を作って `STREAMLIT_APP_URL=` に入れる
 
 詳しくは `docs/github_first_steps.md` と `docs/streamlit_cloud_setup.md` を見てください。
->>>>>>> 5379900 (Initial commit)
 
 ## 日々の使い方
 ### 教員 Excel を更新したとき
 `select_teacher_excel.bat`
 
-<<<<<<< HEAD
-- 選んだファイルは `incoming/teachers_latest.xlsx` に保存されます。
-- `incoming/students_latest.xlsx` が既にあれば、**その前回版を再利用して**自動計算します。
-=======
 - 教員 Excel を選択
 - `incoming/teachers_latest.xlsx` に保存
 - GitHub に commit / push
 - GitHub Actions が教員の TRIOS 情報・研究分野を更新
 - 既に `incoming/students_latest.xlsx` があれば、学生側加工済みデータも使って類似度計算
 - Streamlit Cloud で結果確認
->>>>>>> 5379900 (Initial commit)
 
 ### 学生 Excel を更新したとき
 `select_student_excel.bat`
 
-<<<<<<< HEAD
-- 選んだファイルは `incoming/students_latest.xlsx` に保存されます。
-- `incoming/teachers_latest.xlsx` が既にあれば、**その前回版を再利用して**自動計算します。
-
-### 結果を GitHub / Streamlit Cloud に反映したいとき
-`push_updates.bat`
-
-## Streamlit Community Cloud で見る
-- GitHub に push
-- Streamlit Community Cloud でこのリポジトリを選択
-- Main file path は `streamlit_app.py`
-
-詳しくは `docs/streamlit_cloud_setup.md` を見てください。
-=======
 - 学生 Excel を選択
 - `incoming/students_latest.xlsx` に保存
 - GitHub に commit / push
@@ -116,7 +68,6 @@ GitHub Actions は `python -m committee_matching.pipeline --mode auto` を使い
 - 教員だけある → 教員加工だけ実行
 - 学生だけある → 学生加工だけ実行
 - 両方ある → 推薦結果まで実行
->>>>>>> 5379900 (Initial commit)
 
 ## 入力
 ### 教員 Excel
@@ -158,35 +109,8 @@ GitHub Actions は `python -m committee_matching.pipeline --mode auto` を使い
 
 さらに、推薦する 3 名が似すぎないように、教員間の類似度を使って副指導候補に多様化ペナルティを入れています。
 
-<<<<<<< HEAD
-## 同じ専攻で似た研究が多い場合への対策
-E5 だけではなく、次を混ぜています。
-
-- lexical 類似度
-- exact match
-- cohort 内正規化
-- MMR による委員会多様化
-
-理由は `docs/model_options.md` に整理しています。
-
-## 差し替え箇所
-検索しやすいように、未設定の箇所は次の形にしています。
-
-```text
-！！！！！！！！！！
-ここに入れる
-！！！！！！！！！！
-```
-
 ## 注意
+- GitHub Actions で高速に回しやすいように、既定の埋め込みモデルは `intfloat/multilingual-e5-base` にしています。必要なら `config/app_config.json` で変更できます。
 - TRIOS 側の HTML 構造が変わった場合は `committee_matching/trios.py` のセレクタを調整してください。
 - 過去の修論テーマは `data_sources/masters_thesis_history.xlsx` または `data_sources/masters_thesis_history.csv` を置くと自動で使います。
-- `sample_inputs/` には今回の PDF から抽出したサンプル Excel を入れています。
-- Streamlit Cloud は **表示用** と割り切り、重い類似度計算はローカル PC 側で回す運用を想定しています。
-=======
-## 注意
-- GitHub Actions で高速に回しやすいように、既定の埋め込みモデルは `intfloat/multilingual-e5-base` にしています。必要なら `config/app_config.json` で `large` に変更できます。
-- TRIOS 側の HTML 構造が変わった場合は `committee_matching/trios.py` のセレクタを調整してください。
-- 過去の修論テーマは `data_sources/masters_thesis_history.xlsx` または `data_sources/masters_thesis_history.csv` を置くと自動で使います。
-- Streamlit Cloud は **表示専用** で、重い計算は GitHub Actions 側で行います。
->>>>>>> 5379900 (Initial commit)
+- Streamlit Cloud は **表示専用**、重い計算は GitHub Actions 側で行う運用です。

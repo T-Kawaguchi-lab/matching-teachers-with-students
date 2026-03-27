@@ -1,35 +1,21 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-<<<<<<< HEAD
-python -m venv .venv
-. .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-<<<<<<< HEAD
-pip install -r requirements.txt
-=======
-python -m pip install -r requirements.txt
->>>>>>> 5379900 (Initial commit)
-Write-Host '[OK] Setup completed.'
-=======
 
 Write-Host '[INFO] Initial setup started.'
 
 function Find-PythonExe {
     $candidates = @()
 
-    # 1. PATH 上の python
     $cmdPython = Get-Command python -ErrorAction SilentlyContinue
     if ($cmdPython -and $cmdPython.Source) {
         $candidates += $cmdPython.Source
     }
 
-    # 2. PATH 上の py launcher
     $cmdPy = Get-Command py -ErrorAction SilentlyContinue
     if ($cmdPy -and $cmdPy.Source) {
         $candidates += $cmdPy.Source
     }
 
-    # 3. よくある Anaconda / Miniconda の場所
     $userHomeDir = $env:USERPROFILE
     $candidates += @(
         "$userHomeDir\anaconda3\python.exe",
@@ -48,7 +34,8 @@ function Find-PythonExe {
             try {
                 & $candidate --version | Out-Null
                 return $candidate
-            } catch {
+            }
+            catch {
             }
         }
     }
@@ -80,6 +67,8 @@ if (-not (Test-Path $venvPython)) {
     exit 1
 }
 
+Set-Content -Path (Join-Path $PSScriptRoot 'venv_path.txt') -Value (Join-Path $PSScriptRoot '.venv') -Encoding UTF8
+
 Write-Host '[INFO] Upgrading pip...'
 & $venvPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) {
@@ -95,4 +84,3 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host '[OK] Setup completed successfully.'
->>>>>>> 8799050 (initial commit)
