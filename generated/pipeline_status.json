@@ -1,0 +1,14 @@
+{
+  "teacher_count": 2,
+  "student_count": 2,
+  "embedding_model": "intfloat/multilingual-e5-large",
+  "outputs": {
+    "teachers_enriched": "/mnt/data/committee_matching_system/generated/teachers_enriched.xlsx",
+    "students_enriched": "/mnt/data/committee_matching_system/generated/students_enriched.xlsx",
+    "committee_recommendations": "/mnt/data/committee_matching_system/generated/committee_recommendations.xlsx",
+    "similarity_detailed": "/mnt/data/committee_matching_system/generated/student_teacher_similarity_detailed.xlsx",
+    "teacher_teacher_similarity": "/mnt/data/committee_matching_system/generated/teacher_teacher_similarity.xlsx",
+    "scores_csv": "/mnt/data/committee_matching_system/generated/student_teacher_scores_long.csv"
+  },
+  "git_add": "git repository not found; skipped git add"
+}
