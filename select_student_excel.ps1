@@ -3,12 +3,6 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-<<<<<<< HEAD
-$pythonExe = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path $pythonExe)) {
-    Write-Host '[ERROR] Run setup_first_time.bat first.'
-    exit 1
-=======
 function Load-KeyValueFile {
     param([string]$Path)
     $values = @{}
@@ -22,126 +16,139 @@ function Load-KeyValueFile {
         if ($key) { $values[$key] = $value }
     }
     return $values
->>>>>>> 5379900 (Initial commit)
 }
 
 function Load-Registry {
     param([string]$Path)
     if (Test-Path $Path) {
-        try {
-            return (Get-Content $Path -Raw | ConvertFrom-Json -AsHashtable)
-        } catch {
-            return @{}
-        }
+        try { return (Get-Content $Path -Raw | ConvertFrom-Json -AsHashtable) }
+        catch { return @{} }
     }
     return @{}
 }
 
 function Save-Registry {
     param([hashtable]$Registry, [string]$Path)
-<<<<<<< HEAD
-    $json = $Registry | ConvertTo-Json -Depth 6
-    Set-Content -Path $Path -Value $json -Encoding UTF8
-}
-
-=======
-    $json = $Registry | ConvertTo-Json -Depth 8
-    Set-Content -Path $Path -Value $json -Encoding UTF8
+    $Registry | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
 }
 
 function Ensure-GitRepository {
     if (-not (Test-Path (Join-Path $PSScriptRoot '.git'))) {
-        Write-Host '[ERROR] Git repository not found. Run setup_github_first_push.bat first.'
+        Write-Host '[ERROR] Git repository not found.'
         exit 1
     }
+}
+
+function Get-VenvPython {
+    $venvPathFile = Join-Path $PSScriptRoot 'venv_path.txt'
+    if (-not (Test-Path $venvPathFile)) {
+        Write-Host '[ERROR] venv_path.txt not found. Run setup_first_time.bat first.'
+        exit 1
+    }
+
+    $venvRoot = (Get-Content $venvPathFile -Raw).Trim()
+    $venvPython = Join-Path $venvRoot 'Scripts\python.exe'
+
+    if (-not (Test-Path $venvPython)) {
+        Write-Host '[ERROR] venv python not found.'
+        exit 1
+    }
+
+    return $venvPython
+}
+
+function Git-Run {
+    param([string[]]$Args, [bool]$AllowFail = $false)
+    & git @Args
+    $code = $LASTEXITCODE
+    if ((-not $AllowFail) -and $code -ne 0) {
+        Write-Host "[ERROR] git command failed: git $($Args -join ' ')"
+        exit 1
+    }
+    return $code
+}
+
+function PreSync-LocalChanges {
+    Write-Host '[INFO] Saving local changes before pull...'
+    Git-Run -Args @('add','-A')
+    Git-Run -Args @('commit','-m','auto save before pull') -AllowFail $true | Out-Null
+}
+
+function Pull-Latest {
+    Write-Host '[INFO] Pulling latest main...'
+    Git-Run -Args @('pull','origin','main','--rebase')
+}
+
+function Run-LocalPipelineCheck {
+    $venvPython = Get-VenvPython
+    Write-Host '[INFO] Checking local environment...'
+    & $venvPython -c "import pandas, sklearn, streamlit; print('python env ok')"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[ERROR] Python environment check failed.'
+        exit 1
+    }
+}
+
+function Push-Changes {
+    param([string]$CommitMessage)
+
+    Git-Run -Args @('add','incoming/students_latest.xlsx','incoming/input_registry.json')
+    Git-Run -Args @('commit','-m',$CommitMessage) -AllowFail $true | Out-Null
+    Git-Run -Args @('push','origin','main')
+
+    Write-Host '[OK] Push completed.'
 }
 
 function Open-PostPushPages {
     $envPath = Join-Path $PSScriptRoot '.env'
     if (-not (Test-Path $envPath)) { $envPath = Join-Path $PSScriptRoot '.env.example' }
     $envMap = Load-KeyValueFile -Path $envPath
+
     if ($envMap.ContainsKey('GITHUB_ACTIONS_URL') -and $envMap['GITHUB_ACTIONS_URL'] -and $envMap['GITHUB_ACTIONS_URL'] -notmatch 'ここに入れる') {
         Start-Process $envMap['GITHUB_ACTIONS_URL']
     }
+
     if ($envMap.ContainsKey('STREAMLIT_APP_URL') -and $envMap['STREAMLIT_APP_URL'] -and $envMap['STREAMLIT_APP_URL'] -notmatch 'ここに入れる') {
         Start-Process $envMap['STREAMLIT_APP_URL']
     }
 }
 
->>>>>>> 5379900 (Initial commit)
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Filter = 'Excel Files (*.xlsx;*.xls)|*.xlsx;*.xls'
 $dialog.Title = 'Select student Excel file'
 
-<<<<<<< HEAD
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $target = Join-Path $PSScriptRoot 'incoming\students_latest.xlsx'
-    Copy-Item $dialog.FileName $target -Force
-    Write-Host "[OK] Saved student Excel: $target"
-
-    $teacher = Join-Path $PSScriptRoot 'incoming\teachers_latest.xlsx'
-    $registryPath = Join-Path $PSScriptRoot 'incoming\input_registry.json'
-    $registry = Load-Registry -Path $registryPath
-    $registry['student_input'] = @{
-        original_path = $dialog.FileName
-        stored_path = $target
-        updated_at = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    }
-
-    if (Test-Path $teacher) {
-        $registry['pipeline_behavior'] = 'student updated; teacher latest reused for scoring'
-        Save-Registry -Registry $registry -Path $registryPath
-        Write-Host '[INFO] Reusing previous teacher latest file and running scoring.'
-        & $pythonExe -m committee_matching.pipeline
-    } else {
-        $registry['pipeline_behavior'] = 'student updated only; waiting for first teacher file'
-        Save-Registry -Registry $registry -Path $registryPath
-        Write-Host '[INFO] No teacher Excel yet. Run select_teacher_excel.bat next.'
-    }
-}
-=======
 if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
     Write-Host '[INFO] Selection cancelled.'
     exit 0
 }
 
 Ensure-GitRepository
+Run-LocalPipelineCheck
+PreSync-LocalChanges
+Pull-Latest
 
-$target = Join-Path $PSScriptRoot 'incoming\students_latest.xlsx'
+$incomingDir = Join-Path $PSScriptRoot 'incoming'
+if (-not (Test-Path $incomingDir)) {
+    New-Item -ItemType Directory -Path $incomingDir | Out-Null
+}
+
+$target = Join-Path $incomingDir 'students_latest.xlsx'
 Copy-Item $dialog.FileName $target -Force
-Write-Host "[OK] Saved Excel: $target"
+Write-Host "[OK] Saved student Excel: $target"
 
-$registryPath = Join-Path $PSScriptRoot 'incoming\input_registry.json'
+$registryPath = Join-Path $incomingDir 'input_registry.json'
 $registry = Load-Registry -Path $registryPath
 $registry['student_input'] = @{
     original_path = $dialog.FileName
-    stored_path = $target
-    updated_at = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    workflow = 'commit_and_push_then_github_actions_auto_process'
+    stored_path   = $target
+    updated_at    = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    workflow      = 'auto_commit_then_pull_then_push'
 }
 $registry['last_local_action'] = 'student_excel_updated_and_pushed'
 Save-Registry -Registry $registry -Path $registryPath
 
-git add incoming\students_latest.xlsx incoming/input_registry.json
-if ($LASTEXITCODE -ne 0) {
-    Write-Host '[ERROR] git add failed.'
-    exit 1
-}
-
 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-git commit -m "Update student input [$timestamp]"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host '[INFO] No new changes to commit.'
-} else {
-    git push origin main
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host '[ERROR] git push failed.'
-        exit 1
-    }
-    Write-Host '[OK] Push completed. GitHub Actions will process the new input.'
-}
+Push-Changes -CommitMessage "Update student input [$timestamp]"
 
 Open-PostPushPages
-Write-Host '[INFO] Opened GitHub Actions and Streamlit Cloud if URLs were configured.'
->>>>>>> 5379900 (Initial commit)
