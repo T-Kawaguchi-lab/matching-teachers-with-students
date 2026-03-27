@@ -139,6 +139,14 @@ st.markdown(
         font-size: 0.88rem;
     }
 
+    .weight-box {
+        border: 1px solid #dbe4f0;
+        border-radius: 14px;
+        padding: 14px 16px;
+        background: #f8fbff;
+        margin-bottom: 14px;
+    }
+
     div[data-baseweb="select"] > div {
         border-radius: 12px !important;
     }
@@ -217,12 +225,25 @@ def load_status() -> dict:
         return {}
 
 
+def ensure_numeric(df: pd.DataFrame, col: str, default: float = 0.0) -> pd.Series:
+    if col not in df.columns:
+        return pd.Series([default] * len(df), index=df.index, dtype="float64")
+    return pd.to_numeric(df[col], errors="coerce").fillna(default)
+
+
+def normalize_weights(weight_dict: dict[str, float]) -> dict[str, float]:
+    total = sum(max(0.0, float(v)) for v in weight_dict.values())
+    if total <= 0:
+        return {k: 0.0 for k in weight_dict}
+    return {k: max(0.0, float(v)) / total for k, v in weight_dict.items()}
+
+
 # =========================================================
 # Header
 # =========================================================
 st.markdown('<div class="main-title">修論テーマ × 教員マッチング UI</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">GitHub Actions が生成した最新の教員・学生データと推薦結果を、右側アプリに近いカード型 UI で表示します。</div>',
+    '<div class="sub-title">全候補教員を表示し、スコア重みも変更できる版です。</div>',
     unsafe_allow_html=True,
 )
 
@@ -231,7 +252,6 @@ st.markdown(
 # Load status
 # =========================================================
 status = load_status()
-
 if status:
     with st.expander("最新実行情報 / Pipeline Status", expanded=False):
         st.json(status)
@@ -286,27 +306,65 @@ if not student_names:
 with st.sidebar:
     st.header("表示設定")
     selected_student = st.selectbox("学生を選択", student_names)
-    rank_limit = st.slider("表示件数", 3, 20, 10)
     show_full_data = st.checkbox("全体データを表示", value=False)
-    st.caption("右側アプリのように、選択対象ごとに結果をカード表示します。")
+
+    st.markdown("---")
+    st.subheader("重み変更")
+
+    st.caption("theme / field / lexical / exact_bonus の重みを変更して total_score を再計算します。")
+
+    weight_theme = st.number_input(
+        "テーマ類似重み (theme_score)",
+        min_value=0.0,
+        max_value=10.0,
+        value=0.60,
+        step=0.05,
+        format="%.2f",
+    )
+    weight_field = st.number_input(
+        "分野類似重み (field_score)",
+        min_value=0.0,
+        max_value=10.0,
+        value=0.25,
+        step=0.05,
+        format="%.2f",
+    )
+    weight_lexical = st.number_input(
+        "語句スコア重み (lexical_score)",
+        min_value=0.0,
+        max_value=10.0,
+        value=0.10,
+        step=0.05,
+        format="%.2f",
+    )
+    weight_bonus = st.number_input(
+        "一致ボーナス重み (exact_bonus)",
+        min_value=0.0,
+        max_value=10.0,
+        value=1.00,
+        step=0.05,
+        format="%.2f",
+    )
+
+    use_reweighted_total = st.checkbox(
+        "重み変更後の total_score を使う",
+        value=True,
+    )
 
 
 # =========================================================
 # Filter selected student
 # =========================================================
-student_scores = (
-    scores[scores[score_student_col] == selected_student]
-    .sort_values("rank" if "rank" in scores.columns else scores.columns[0])
-    .head(rank_limit)
-    .copy()
-)
+student_scores = scores[scores[score_student_col] == selected_student].copy()
 
 if student_scores.empty:
     st.warning("この学生の候補データがありません。")
     st.stop()
 
 student_info_df = students_df[students_df[student_name_col] == selected_student]
-committee_info_df = committee_df[committee_df[first_existing(committee_df, ["student_name", "name"], "student_name")] == selected_student]
+committee_info_df = committee_df[
+    committee_df[first_existing(committee_df, ["student_name", "name"], "student_name")] == selected_student
+]
 
 if student_info_df.empty or committee_info_df.empty:
     st.warning("学生情報または委員会情報が見つかりません。")
@@ -317,10 +375,50 @@ committee_info = committee_info_df.iloc[0]
 
 
 # =========================================================
+# Recompute weighted score
+# =========================================================
+weights_raw = {
+    "theme_score": float(weight_theme),
+    "field_score": float(weight_field),
+    "lexical_score": float(weight_lexical),
+    "exact_bonus": float(weight_bonus),
+}
+weights_norm = normalize_weights(weights_raw)
+
+student_scores["theme_score_f"] = ensure_numeric(student_scores, "theme_score")
+student_scores["field_score_f"] = ensure_numeric(student_scores, "field_score")
+student_scores["lexical_score_f"] = ensure_numeric(student_scores, "lexical_score")
+student_scores["exact_bonus_f"] = ensure_numeric(student_scores, "exact_bonus")
+
+student_scores["reweighted_total_score"] = (
+    student_scores["theme_score_f"] * weights_norm["theme_score"]
+    + student_scores["field_score_f"] * weights_norm["field_score"]
+    + student_scores["lexical_score_f"] * weights_norm["lexical_score"]
+    + student_scores["exact_bonus_f"] * weights_norm["exact_bonus"]
+)
+
+if use_reweighted_total:
+    student_scores["display_total_score"] = student_scores["reweighted_total_score"]
+else:
+    student_scores["display_total_score"] = ensure_numeric(student_scores, "total_score")
+
+student_scores = student_scores.sort_values(
+    by=["display_total_score", "teacher_name"] if "teacher_name" in student_scores.columns else ["display_total_score"],
+    ascending=[False, True] if "teacher_name" in student_scores.columns else [False],
+).reset_index(drop=True)
+
+student_scores["display_rank"] = student_scores.index + 1
+
+
+# =========================================================
 # Top metrics
 # =========================================================
 total_students = len(student_names)
-total_teachers = teachers_df[teacher_name_col].dropna().astype(str).nunique() if teacher_name_col in teachers_df.columns else len(teachers_df)
+total_teachers = (
+    teachers_df[teacher_name_col].dropna().astype(str).nunique()
+    if teacher_name_col in teachers_df.columns
+    else len(teachers_df)
+)
 candidate_count = len(student_scores)
 
 m1, m2, m3 = st.columns(3)
@@ -329,7 +427,22 @@ with m1:
 with m2:
     render_metric_card("教員数", total_teachers, "候補教員データ")
 with m3:
-    render_metric_card("表示候補数", candidate_count, f"{selected_student} さん向け")
+    render_metric_card("表示候補数", candidate_count, f"{selected_student} さん向け（全件表示）")
+
+
+# =========================================================
+# Weight summary
+# =========================================================
+st.markdown('<div class="weight-box">', unsafe_allow_html=True)
+st.markdown('<div class="section-title" style="margin-top:0;">現在の重み / Current Weights</div>', unsafe_allow_html=True)
+st.write(
+    f"theme = **{weights_norm['theme_score']:.3f}** / "
+    f"field = **{weights_norm['field_score']:.3f}** / "
+    f"lexical = **{weights_norm['lexical_score']:.3f}** / "
+    f"exact_bonus = **{weights_norm['exact_bonus']:.3f}**"
+)
+st.caption("入力値は合計1でなくてよく、内部で比率に正規化して再計算します。")
+st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================================================
@@ -361,16 +474,21 @@ with right_top:
 
 
 # =========================================================
-# Ranking table
+# Results list: show ALL
 # =========================================================
-st.markdown('<div class="section-title">上位候補ランキング / Results List</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">候補一覧 / Results List（全件表示）</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="small-note">右側アプリの結果一覧に寄せて、主要スコアを先頭にまとめて表示しています。</div>',
+    '<div class="small-note">上位候補のみではなく、その学生に対する全教員候補を表示しています。重み変更後の total_score でも並び替えできます。</div>',
     unsafe_allow_html=True,
 )
 
+display_df = student_scores.copy()
+
+# 表示用の総合スコア列を差し替え
+display_df["total_score"] = display_df["display_total_score"]
+
 display_cols = [
-    "rank",
+    "display_rank",
     "teacher_name",
     "total_score",
     "theme_score",
@@ -378,11 +496,11 @@ display_cols = [
     "lexical_score",
     "exact_bonus",
 ]
-existing_cols = [c for c in display_cols if c in student_scores.columns]
+existing_cols = [c for c in display_cols if c in display_df.columns]
 
 column_config = {}
-if "rank" in existing_cols:
-    column_config["rank"] = st.column_config.NumberColumn("順位", format="%d")
+if "display_rank" in existing_cols:
+    column_config["display_rank"] = st.column_config.NumberColumn("順位", format="%d")
 if "teacher_name" in existing_cols:
     column_config["teacher_name"] = st.column_config.TextColumn("教員名")
 if "total_score" in existing_cols:
@@ -392,16 +510,24 @@ if "theme_score" in existing_cols:
 if "field_score" in existing_cols:
     column_config["field_score"] = st.column_config.NumberColumn("分野類似", format="%.4f")
 if "lexical_score" in existing_cols:
-    column_config["lexical_score"] = st.column_config.NumberColumn("語彙スコア", format="%.4f")
+    column_config["lexical_score"] = st.column_config.NumberColumn("語句スコア", format="%.4f")
 if "exact_bonus" in existing_cols:
     column_config["exact_bonus"] = st.column_config.NumberColumn("一致ボーナス", format="%.4f")
 
 st.dataframe(
-    student_scores[existing_cols],
+    display_df[existing_cols],
     use_container_width=True,
     hide_index=True,
-    height=420,
+    height=700,
     column_config=column_config,
+)
+
+csv_download = display_df[existing_cols].to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    label="この学生の全候補一覧をCSVでダウンロード",
+    data=csv_download,
+    file_name=f"{selected_student}_all_candidates.csv",
+    mime="text/csv",
 )
 
 
@@ -410,7 +536,7 @@ st.dataframe(
 # =========================================================
 st.markdown('<div class="section-title">候補教員の詳細 / Teacher Detail</div>', unsafe_allow_html=True)
 
-teacher_options = student_scores[score_teacher_col].dropna().astype(str).tolist()
+teacher_options = display_df[score_teacher_col].dropna().astype(str).tolist()
 selected_teacher = st.selectbox(
     "教員を選択",
     teacher_options,
@@ -461,7 +587,6 @@ with detail_right:
     render_field("過去修論テーマ", value_from_row(teacher_info, ["past_thesis_titles"]))
 
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 st.markdown('<div class="card-soft">', unsafe_allow_html=True)
 st.markdown('<div class="section-title" style="margin-top:0;">TRIOS由来の情報 / TRIOS-based Information</div>', unsafe_allow_html=True)
