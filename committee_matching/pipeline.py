@@ -41,6 +41,16 @@ def _file_meta(path: Path) -> Dict[str, object]:
     }
 
 
+def _matched_words(student_fields: List[str], teacher_fields: List[str]) -> List[str]:
+    s_norm = {normalize_text(v).lower(): normalize_text(v) for v in student_fields if normalize_text(v)}
+    t_norm = {normalize_text(v).lower(): normalize_text(v) for v in teacher_fields if normalize_text(v)}
+    words: List[str] = []
+    for key, value in s_norm.items():
+        if key in t_norm:
+            words.append(t_norm[key] or value)
+    return words
+
+
 def prepare_teacher_dataframe(
     teachers: pd.DataFrame,
     cfg: Dict[str, object],
@@ -101,13 +111,16 @@ def prepare_student_dataframe(
     for _, row in students.iterrows():
         thesis_title = normalize_text(row['thesis_title'])
         generated_fields = matcher.suggest_fields(
-            [row['student_name'], thesis_title, normalize_text(row.get('department', ''))],
-            top_k=int(cfg['top_k_fields']),
+            [thesis_title],
+            top_k=int(cfg.get('student_top_k_fields', 3)),
+            min_score=float(cfg.get('student_field_min_score', 0.32)),
+            additional_min_score=float(cfg.get('student_additional_field_min_score', 0.30)),
+            relative_score_floor=float(cfg.get('student_relative_score_floor', 0.92)),
         )
         final_fields = merge_manual_and_generated(
             row.get('manual_research_fields', ''),
             generated_fields,
-            top_k=int(cfg['top_k_fields']),
+            top_k=int(cfg.get('student_top_k_fields', 3)),
         )
 
         enriched_rows.append({
@@ -176,7 +189,7 @@ def write_outputs(
     teacher_names = teachers['teacher_name'].tolist()
     long_rows: List[Dict[str, object]] = []
     committee_rows: List[Dict[str, object]] = []
-    diversity_penalty_weight = 0.12
+    diversity_penalty_weight = float(get_config().get('teacher_diversity_penalty_weight', 0.12))
 
     for i, student in students.iterrows():
         main_name, sub1_name, sub2_name, selected_idxs = greedy_committee_selection(
@@ -188,7 +201,11 @@ def write_outputs(
         )
 
         sorted_idx = similarity.total_score[i].argsort()[::-1]
+        student_fields = student.get('research_fields', []) if isinstance(student.get('research_fields', []), list) else []
         for rank, teacher_idx in enumerate(sorted_idx, start=1):
+            teacher_row = teachers.iloc[int(teacher_idx)]
+            teacher_fields = teacher_row.get('research_fields', []) if isinstance(teacher_row.get('research_fields', []), list) else []
+            matched_words = _matched_words(student_fields, teacher_fields)
             long_rows.append({
                 'student_name': student['student_name'],
                 'thesis_title': student['thesis_title'],
@@ -197,9 +214,9 @@ def write_outputs(
                 'total_score': float(similarity.total_score[i, teacher_idx]),
                 'theme_score': float(similarity.theme_score[i, teacher_idx]),
                 'field_score': float(similarity.field_score[i, teacher_idx]),
-                'lexical_score': float(similarity.lexical_score[i, teacher_idx]),
                 'exact_bonus': float(similarity.exact_bonus[i, teacher_idx]),
-                'calibrated_score': float(similarity.calibrated_score[i, teacher_idx]),
+                'matched_count': len(matched_words),
+                'matched_words': ' / '.join(matched_words),
             })
 
         main_score = float(similarity.total_score[i, selected_idxs[0]]) if len(selected_idxs) >= 1 else 0.0

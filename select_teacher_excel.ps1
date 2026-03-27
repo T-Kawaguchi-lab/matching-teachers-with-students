@@ -33,7 +33,19 @@ function Save-Registry {
         [string]$Path
     )
 
-    $Registry | ConvertTo-Json -Depth 8 | Set-Content -Path $Path -Encoding UTF8
+    $json = $Registry | ConvertTo-Json -Depth 8
+    for ($i = 1; $i -le 5; $i++) {
+        try {
+            Set-Content -Path $Path -Value $json -Encoding UTF8
+            return
+        }
+        catch {
+            if ($i -eq 5) {
+                throw
+            }
+            Start-Sleep -Milliseconds 700
+        }
+    }
 }
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -149,8 +161,9 @@ $registry['teacher_input'] = @{
 }
 $registry['last_local_action'] = 'teacher_excel_updated_and_pushed'
 Save-Registry -Registry $registry -Path $registryPath
+Write-Host "Updated local registry (not pushed to GitHub)." -ForegroundColor DarkGray
 
-git add "incoming/teachers_latest.xlsx" "incoming/input_registry.json"
+git add "incoming/teachers_latest.xlsx"
 if ($LASTEXITCODE -ne 0) {
     Fail-And-Pause "git add failed."
 }

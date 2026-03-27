@@ -1,9 +1,0 @@
-﻿{
-    "last_local_action":  "teacher_excel_updated_and_pushed",
-    "teacher_input":  {
-                          "updated_at":  "2026-03-28 04:32:09",
-                          "original_path":  "C:\\Users\\takum\\OneDrive\\デスクトップ\\吉瀬研\\教授・学生修論マッチング\\thesis_committee_matching_system_streamlit_fixed\\teachers_extracted_from_pdf.xlsx",
-                          "stored_path":  "C:\\Users\\takum\\OneDrive\\デスクトップ\\吉瀬研\\教授・学生修論マッチング\\v2\\matching\\incoming\\teachers_latest.xlsx",
-                          "workflow":  "upload_style_pull_then_commit_then_push"
-                      }
-}

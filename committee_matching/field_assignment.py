@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable, List
 
 import numpy as np
+
 from .config import TAXONOMY_PATH
 from .utils import ensure_list, load_json, normalize_text, unique_keep_order
 
@@ -18,7 +19,14 @@ class FieldTaxonomyMatcher:
             show_progress_bar=False,
         )
 
-    def suggest_fields(self, texts: Iterable[str], top_k: int = 5) -> List[str]:
+    def suggest_fields(
+        self,
+        texts: Iterable[str],
+        top_k: int = 5,
+        min_score: float = 0.18,
+        additional_min_score: float | None = None,
+        relative_score_floor: float | None = None,
+    ) -> List[str]:
         merged_text = '\n'.join([normalize_text(t) for t in texts if normalize_text(t)])
         if not merged_text:
             return []
@@ -30,10 +38,25 @@ class FieldTaxonomyMatcher:
         scores = np.asarray(self.taxonomy_embeddings @ vec, dtype=float)
         order = np.argsort(-scores)
         selected: List[str] = []
-        for idx in order[: max(top_k * 3, top_k)]:
+        best_score: float | None = None
+        follow_score = additional_min_score if additional_min_score is not None else min_score
+
+        for idx in order:
             field_name = self.taxonomy[idx]
             score = float(scores[idx])
-            if score < 0.18 and len(selected) >= 2:
+
+            if best_score is None:
+                if score < min_score:
+                    break
+                best_score = score
+                selected.append(field_name)
+                if len(selected) >= top_k:
+                    break
+                continue
+
+            if score < follow_score:
+                continue
+            if relative_score_floor is not None and best_score > 0 and score < best_score * relative_score_floor:
                 continue
             selected.append(field_name)
             if len(selected) >= top_k:

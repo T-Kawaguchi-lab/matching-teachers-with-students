@@ -3,11 +3,8 @@
   "top_k_fields": 5,
   "field_similarity_weight": 0.25,
   "theme_similarity_weight": 0.45,
-  "lexical_similarity_weight": 0.2,
-  "exact_field_bonus_weight": 0.1,
   "exact_field_bonus_per_match": 0.03,
   "max_exact_field_bonus": 0.12,
-  "cohort_zscore_weight": 0.15,
   "teacher_diversity_penalty_weight": 0.12,
   "main_advisor_weight_multiplier": 1.0,
   "sub_advisor_weight_multiplier": 0.92,
@@ -22,5 +19,9 @@
   "trios_base_url": "https://trios.tsukuba.ac.jp",
   "trios_cache_dir": "data_sources/trios_html_cache",
   "teacher_template_sheet": "teachers",
-  "student_template_sheet": "students"
+  "student_template_sheet": "students",
+  "student_top_k_fields": 3,
+  "student_field_min_score": 0.32,
+  "student_additional_field_min_score": 0.3,
+  "student_relative_score_floor": 0.92
 }
