@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-<<<<<<< HEAD
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
-=======
-import argparse
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Tuple
 
-import pandas as pd
-
->>>>>>> 5379900 (Initial commit)
 from .config import get_config
 from .excel_io import ensure_input_files, load_student_excel, load_teacher_excel
 from .field_assignment import FieldTaxonomyMatcher, merge_manual_and_generated
@@ -30,7 +22,10 @@ OUTPUT_STATUS_FILE = 'generated/pipeline_status.json'
 
 
 def _resolve_history_file(cfg: Dict[str, object], root_dir: Path) -> Path | None:
-    candidates = [root_dir / str(cfg['teacher_history_excel']), root_dir / str(cfg['teacher_history_csv'])]
+    candidates = [
+        root_dir / str(cfg['teacher_history_excel']),
+        root_dir / str(cfg['teacher_history_csv']),
+    ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -46,7 +41,12 @@ def _file_meta(path: Path) -> Dict[str, object]:
     }
 
 
-def prepare_teacher_dataframe(teachers: pd.DataFrame, cfg: Dict[str, object], root_dir: Path, model) -> pd.DataFrame:
+def prepare_teacher_dataframe(
+    teachers: pd.DataFrame,
+    cfg: Dict[str, object],
+    root_dir: Path,
+    model,
+) -> pd.DataFrame:
     history_file = _resolve_history_file(cfg, root_dir)
     history_map = load_teacher_history_map(history_file) if history_file else {}
     matcher = FieldTaxonomyMatcher(model)
@@ -65,7 +65,12 @@ def prepare_teacher_dataframe(teachers: pd.DataFrame, cfg: Dict[str, object], ro
             [teacher_name, *trios_data.get('research_topics', []), *trios_data.get('papers', []), *thesis_titles],
             top_k=int(cfg['top_k_fields']),
         )
-        final_fields = merge_manual_and_generated(row.get('manual_research_fields', ''), generated_fields, top_k=int(cfg['top_k_fields']))
+        final_fields = merge_manual_and_generated(
+            row.get('manual_research_fields', ''),
+            generated_fields,
+            top_k=int(cfg['top_k_fields']),
+        )
+
         enriched_rows.append({
             'teacher_name': teacher_name,
             'department': normalize_text(row.get('department', '')),
@@ -81,19 +86,30 @@ def prepare_teacher_dataframe(teachers: pd.DataFrame, cfg: Dict[str, object], ro
             'research_fields': final_fields,
             'research_fields_text': ' / '.join(final_fields),
         })
+
     return pd.DataFrame(enriched_rows)
 
 
-def prepare_student_dataframe(students: pd.DataFrame, cfg: Dict[str, object], model) -> pd.DataFrame:
+def prepare_student_dataframe(
+    students: pd.DataFrame,
+    cfg: Dict[str, object],
+    model,
+) -> pd.DataFrame:
     matcher = FieldTaxonomyMatcher(model)
     enriched_rows: List[Dict[str, object]] = []
+
     for _, row in students.iterrows():
         thesis_title = normalize_text(row['thesis_title'])
         generated_fields = matcher.suggest_fields(
             [row['student_name'], thesis_title, normalize_text(row.get('department', ''))],
             top_k=int(cfg['top_k_fields']),
         )
-        final_fields = merge_manual_and_generated(row.get('manual_research_fields', ''), generated_fields, top_k=int(cfg['top_k_fields']))
+        final_fields = merge_manual_and_generated(
+            row.get('manual_research_fields', ''),
+            generated_fields,
+            top_k=int(cfg['top_k_fields']),
+        )
+
         enriched_rows.append({
             'student_name': normalize_text(row['student_name']),
             'department': normalize_text(row.get('department', '')),
@@ -101,35 +117,43 @@ def prepare_student_dataframe(students: pd.DataFrame, cfg: Dict[str, object], mo
             'research_fields': final_fields,
             'research_fields_text': ' / '.join(final_fields),
         })
+
     return pd.DataFrame(enriched_rows)
 
 
-<<<<<<< HEAD
-=======
 def _export_frame_to_excel(df: pd.DataFrame, path: Path) -> None:
     export_df = df.copy()
     for col in ['research_fields', 'trios_topics', 'trios_papers', 'past_thesis_titles']:
         if col in export_df.columns:
-            export_df[col] = export_df[col].map(lambda xs: ' ; '.join(xs) if isinstance(xs, list) else xs)
+            export_df[col] = export_df[col].map(
+                lambda xs: ' ; '.join(xs) if isinstance(xs, list) else xs
+            )
     export_df.to_excel(path, index=False)
 
 
-def write_partial_outputs(root_dir: Path, teachers: pd.DataFrame | None = None, students: pd.DataFrame | None = None) -> Dict[str, str]:
+def write_partial_outputs(
+    root_dir: Path,
+    teachers: pd.DataFrame | None = None,
+    students: pd.DataFrame | None = None,
+) -> Dict[str, str]:
     generated_dir = root_dir / 'generated'
     generated_dir.mkdir(parents=True, exist_ok=True)
+
     outputs: Dict[str, str] = {}
+
     if teachers is not None:
         teacher_out = generated_dir / 'teachers_enriched.xlsx'
         _export_frame_to_excel(teachers, teacher_out)
         outputs['teachers_enriched'] = str(teacher_out)
+
     if students is not None:
         student_out = generated_dir / 'students_enriched.xlsx'
         _export_frame_to_excel(students, student_out)
         outputs['students_enriched'] = str(student_out)
+
     return outputs
 
 
->>>>>>> 5379900 (Initial commit)
 def write_outputs(
     root_dir: Path,
     teachers: pd.DataFrame,
@@ -146,40 +170,23 @@ def write_outputs(
     teacher_teacher_out = generated_dir / 'teacher_teacher_similarity.xlsx'
     scores_csv = generated_dir / 'student_teacher_scores_long.csv'
 
-<<<<<<< HEAD
-    teacher_export = teachers.copy()
-    student_export = students.copy()
-    for df in [teacher_export, student_export]:
-        for col in ['research_fields', 'trios_topics', 'trios_papers', 'past_thesis_titles']:
-            if col in df.columns:
-                df[col] = df[col].map(lambda xs: ' ; '.join(xs) if isinstance(xs, list) else xs)
-
-    teacher_export.to_excel(teacher_out, index=False)
-    student_export.to_excel(student_out, index=False)
-=======
     _export_frame_to_excel(teachers, teacher_out)
     _export_frame_to_excel(students, student_out)
->>>>>>> 5379900 (Initial commit)
 
     teacher_names = teachers['teacher_name'].tolist()
     long_rows: List[Dict[str, object]] = []
     committee_rows: List[Dict[str, object]] = []
-<<<<<<< HEAD
-=======
     diversity_penalty_weight = 0.12
->>>>>>> 5379900 (Initial commit)
+
     for i, student in students.iterrows():
         main_name, sub1_name, sub2_name, selected_idxs = greedy_committee_selection(
             student_index=i,
             teacher_names=teacher_names,
             total_score=similarity.total_score,
             teacher_teacher_similarity=similarity.teacher_teacher_similarity,
-<<<<<<< HEAD
-            diversity_penalty_weight=0.12,
-=======
             diversity_penalty_weight=diversity_penalty_weight,
->>>>>>> 5379900 (Initial commit)
         )
+
         sorted_idx = similarity.total_score[i].argsort()[::-1]
         for rank, teacher_idx in enumerate(sorted_idx, start=1):
             long_rows.append({
@@ -194,9 +201,11 @@ def write_outputs(
                 'exact_bonus': float(similarity.exact_bonus[i, teacher_idx]),
                 'calibrated_score': float(similarity.calibrated_score[i, teacher_idx]),
             })
+
         main_score = float(similarity.total_score[i, selected_idxs[0]]) if len(selected_idxs) >= 1 else 0.0
         sub1_score = float(similarity.total_score[i, selected_idxs[1]]) if len(selected_idxs) >= 2 else 0.0
         sub2_score = float(similarity.total_score[i, selected_idxs[2]]) if len(selected_idxs) >= 3 else 0.0
+
         committee_rows.append({
             'student_name': student['student_name'],
             'thesis_title': student['thesis_title'],
@@ -210,14 +219,21 @@ def write_outputs(
 
     detail_df = pd.DataFrame(long_rows)
     committee_df = pd.DataFrame(committee_rows)
-    teacher_teacher_df = pd.DataFrame(similarity.teacher_teacher_similarity, index=teacher_names, columns=teacher_names)
+    teacher_teacher_df = pd.DataFrame(
+        similarity.teacher_teacher_similarity,
+        index=teacher_names,
+        columns=teacher_names,
+    )
 
     with pd.ExcelWriter(committee_out, engine='openpyxl') as writer:
         committee_df.to_excel(writer, index=False, sheet_name='committee')
+
     with pd.ExcelWriter(detailed_out, engine='openpyxl') as writer:
         detail_df.to_excel(writer, index=False, sheet_name='scores')
+
     with pd.ExcelWriter(teacher_teacher_out, engine='openpyxl') as writer:
         teacher_teacher_df.to_excel(writer, sheet_name='teacher_teacher_similarity')
+
     detail_df.to_csv(scores_csv, index=False, encoding='utf-8-sig')
 
     return {
@@ -230,28 +246,29 @@ def write_outputs(
     }
 
 
-<<<<<<< HEAD
-def run_pipeline() -> Dict[str, object]:
-    cfg = get_config()
-    root_dir = Path(cfg['root_dir'])
-    teacher_path, student_path = ensure_input_files(
-        root_dir / str(cfg['incoming_teacher_excel']),
-        root_dir / str(cfg['incoming_student_excel']),
-    )
-    model = load_embedding_model(str(cfg['embedding_model']))
-
-=======
-def _save_status(root_dir: Path, status: Dict[str, object], git_add_paths: List[str] | None = None, skip_git_add: bool = False) -> Dict[str, object]:
+def _save_status(
+    root_dir: Path,
+    status: Dict[str, object],
+    git_add_paths: List[str] | None = None,
+    skip_git_add: bool = False,
+) -> Dict[str, object]:
     if git_add_paths and not skip_git_add:
         status['git_add'] = git_add_if_available(root_dir, git_add_paths)
     save_json(root_dir / OUTPUT_STATUS_FILE, status)
     return status
 
 
-def run_teacher_only(cfg: Dict[str, object], root_dir: Path, model, teacher_path: Path, skip_git_add: bool = False) -> Dict[str, object]:
+def run_teacher_only(
+    cfg: Dict[str, object],
+    root_dir: Path,
+    model,
+    teacher_path: Path,
+    skip_git_add: bool = False,
+) -> Dict[str, object]:
     teachers = load_teacher_excel(teacher_path)
     teachers_prepared = prepare_teacher_dataframe(teachers, cfg, root_dir, model)
     outputs = write_partial_outputs(root_dir, teachers=teachers_prepared)
+
     status = {
         'mode': 'teacher_only',
         'teacher_count': int(len(teachers_prepared)),
@@ -267,10 +284,17 @@ def run_teacher_only(cfg: Dict[str, object], root_dir: Path, model, teacher_path
     return _save_status(root_dir, status, ['generated'], skip_git_add)
 
 
-def run_student_only(cfg: Dict[str, object], root_dir: Path, model, student_path: Path, skip_git_add: bool = False) -> Dict[str, object]:
+def run_student_only(
+    cfg: Dict[str, object],
+    root_dir: Path,
+    model,
+    student_path: Path,
+    skip_git_add: bool = False,
+) -> Dict[str, object]:
     students = load_student_excel(student_path)
     students_prepared = prepare_student_dataframe(students, cfg, model)
     outputs = write_partial_outputs(root_dir, students=students_prepared)
+
     status = {
         'mode': 'student_only',
         'teacher_count': 0,
@@ -286,8 +310,14 @@ def run_student_only(cfg: Dict[str, object], root_dir: Path, model, student_path
     return _save_status(root_dir, status, ['generated'], skip_git_add)
 
 
-def run_full(cfg: Dict[str, object], root_dir: Path, model, teacher_path: Path, student_path: Path, skip_git_add: bool = False) -> Dict[str, object]:
->>>>>>> 5379900 (Initial commit)
+def run_full(
+    cfg: Dict[str, object],
+    root_dir: Path,
+    model,
+    teacher_path: Path,
+    student_path: Path,
+    skip_git_add: bool = False,
+) -> Dict[str, object]:
     teachers = load_teacher_excel(teacher_path)
     students = load_student_excel(student_path)
     teachers_prepared = prepare_teacher_dataframe(teachers, cfg, root_dir, model)
@@ -296,35 +326,18 @@ def run_full(cfg: Dict[str, object], root_dir: Path, model, teacher_path: Path, 
     outputs = write_outputs(root_dir, teachers_prepared, students_prepared, similarity)
 
     status = {
-<<<<<<< HEAD
-        'teacher_count': int(len(teachers_prepared)),
-        'student_count': int(len(students_prepared)),
-        'embedding_model': cfg['embedding_model'],
-=======
         'mode': 'full',
         'teacher_count': int(len(teachers_prepared)),
         'student_count': int(len(students_prepared)),
         'embedding_model': cfg['embedding_model'],
         'can_score': True,
         'message': 'teacher and student data were both available. matching finished successfully.',
->>>>>>> 5379900 (Initial commit)
         'input_files': {
             'teacher': _file_meta(teacher_path),
             'student': _file_meta(student_path),
         },
         'outputs': outputs,
     }
-<<<<<<< HEAD
-    if bool(cfg.get('enable_git_add', False)):
-        status['git_add'] = git_add_if_available(root_dir, ['generated', 'incoming', 'data_sources', 'sample_inputs'])
-    save_json(root_dir / OUTPUT_STATUS_FILE, status)
-    return status
-
-
-if __name__ == '__main__':
-    result = run_pipeline()
-    print(result)
-=======
     return _save_status(root_dir, status, ['generated'], skip_git_add)
 
 
@@ -351,14 +364,20 @@ def run_pipeline(mode: str = 'auto', skip_git_add: bool = False) -> Dict[str, ob
 
     teacher_exists = teacher_path.exists()
     student_exists = student_path.exists()
+
     if teacher_exists and student_exists:
         teacher_file, student_file = ensure_input_files(teacher_path, student_path)
         return run_full(cfg, root_dir, model, teacher_file, student_file, skip_git_add=skip_git_add)
+
     if teacher_exists:
         return run_teacher_only(cfg, root_dir, model, teacher_path, skip_git_add=skip_git_add)
+
     if student_exists:
         return run_student_only(cfg, root_dir, model, student_path, skip_git_add=skip_git_add)
-    raise FileNotFoundError('教員Excelと学生Excelのどちらも見つかりません。incoming/ に最新ファイルを置いてください。')
+
+    raise FileNotFoundError(
+        '教員Excelと学生Excelのどちらも見つかりません。incoming/ に最新ファイルを置いてください。'
+    )
 
 
 def main() -> None:
@@ -366,10 +385,10 @@ def main() -> None:
     parser.add_argument('--mode', choices=['auto', 'teacher_only', 'student_only', 'full'], default='auto')
     parser.add_argument('--skip-git-add', action='store_true')
     args = parser.parse_args()
+
     result = run_pipeline(mode=args.mode, skip_git_add=args.skip_git_add)
     print(result)
 
 
 if __name__ == '__main__':
     main()
->>>>>>> 5379900 (Initial commit)
