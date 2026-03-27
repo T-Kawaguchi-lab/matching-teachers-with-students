@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 import streamlit as st
@@ -147,6 +148,18 @@ st.markdown(
         margin-bottom: 14px;
     }
 
+    .tag {
+        display: inline-block;
+        padding: 0.22rem 0.55rem;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #3730a3;
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin-right: 0.35rem;
+        margin-bottom: 0.35rem;
+    }
+
     div[data-baseweb="select"] > div {
         border-radius: 12px !important;
     }
@@ -170,6 +183,15 @@ def safe_str(v: Any) -> str:
         return ""
     s = str(v)
     return "" if s.lower() == "nan" else s
+
+
+def is_missing(v: Any) -> bool:
+    if v is None:
+        return True
+    try:
+        return bool(pd.isna(v))
+    except Exception:
+        return False
 
 
 def first_existing(df: pd.DataFrame, candidates: list[str], default: str = "") -> str:
@@ -232,10 +254,118 @@ def ensure_numeric(df: pd.DataFrame, col: str, default: float = 0.0) -> pd.Serie
 
 
 def normalize_weights(weight_dict: dict[str, float]) -> dict[str, float]:
-    total = sum(max(0.0, float(v)) for v in weight_dict.values())
+    clipped = {k: max(0.0, float(v)) for k, v in weight_dict.items()}
+    total = sum(clipped.values())
     if total <= 0:
-        return {k: 0.0 for k in weight_dict}
-    return {k: max(0.0, float(v)) / total for k, v in weight_dict.items()}
+        return {k: 0.0 for k in clipped}
+    return {k: v / total for k, v in clipped.items()}
+
+
+def rowwise_minmax_zscore_like(series: pd.Series) -> pd.Series:
+    """
+    zip内ロジックの rowwise_zscore(base_score) 相当の1次元版。
+    1人の学生に対する全教員スコア列に対して、
+    zscore -> minmax(0..1) をかける。
+    """
+    s = pd.to_numeric(series, errors="coerce").fillna(0.0).astype(float)
+    if len(s) == 0:
+        return s
+
+    mu = float(s.mean())
+    sigma = float(s.std(ddof=0))
+    if sigma == 0:
+        z = pd.Series([0.0] * len(s), index=s.index, dtype="float64")
+    else:
+        z = (s - mu) / sigma
+
+    z_min = float(z.min())
+    z_max = float(z.max())
+    denom = z_max - z_min
+    if denom == 0:
+        return pd.Series([0.0] * len(s), index=s.index, dtype="float64")
+    return (z - z_min) / denom
+
+
+def normalize_text_token(text: str) -> str:
+    return " ".join(safe_str(text).strip().lower().split())
+
+
+def parse_listlike(value: Any) -> list[str]:
+    if is_missing(value):
+        return []
+
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            s = safe_str(item).strip()
+            if s:
+                out.append(s)
+        return out
+
+    s = safe_str(value).strip()
+    if not s:
+        return []
+
+    # 文字列化された list に対応
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            parsed = json.loads(s.replace("'", '"'))
+            if isinstance(parsed, list):
+                return [safe_str(x).strip() for x in parsed if safe_str(x).strip()]
+        except Exception:
+            pass
+
+    # よくある区切りに対応
+    seps = [" ; ", ";", "、", ",", "\n", " / ", "/"]
+    tmp = [s]
+    for sep in seps:
+        next_tmp = []
+        for piece in tmp:
+            next_tmp.extend(piece.split(sep))
+        tmp = next_tmp
+
+    out = [p.strip() for p in tmp if p.strip()]
+    return out
+
+
+def get_fields_from_row(row: pd.Series) -> list[str]:
+    candidates = [
+        "research_fields",
+        "research_fields_text",
+        "research_field",
+        "field",
+    ]
+    for c in candidates:
+        if c in row.index:
+            vals = parse_listlike(row[c])
+            if vals:
+                return vals
+    return []
+
+
+def compute_exact_matches(student_fields: Iterable[str], teacher_fields: Iterable[str]) -> list[str]:
+    teacher_map: dict[str, str] = {}
+    for t in teacher_fields:
+        key = normalize_text_token(t)
+        if key and key not in teacher_map:
+            teacher_map[key] = safe_str(t).strip()
+
+    matches: list[str] = []
+    seen = set()
+    for s in student_fields:
+        key = normalize_text_token(s)
+        if key and key in teacher_map and key not in seen:
+            matches.append(teacher_map[key] or safe_str(s).strip())
+            seen.add(key)
+    return matches
+
+
+def render_tags(tags: list[str]) -> None:
+    if not tags:
+        st.markdown('<div class="value">なし</div>', unsafe_allow_html=True)
+        return
+    html = "".join(f'<span class="tag">{safe_str(tag)}</span>' for tag in tags)
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # =========================================================
@@ -243,7 +373,7 @@ def normalize_weights(weight_dict: dict[str, float]) -> dict[str, float]:
 # =========================================================
 st.markdown('<div class="main-title">修論テーマ × 教員マッチング UI</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">全候補教員を表示し、スコア重みも変更できる版です。</div>',
+    '<div class="sub-title">全候補教員を表示し、重み変更・一致ワード表示に対応した版です。</div>',
     unsafe_allow_html=True,
 )
 
@@ -310,14 +440,13 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("重み変更")
-
-    st.caption("theme / field / lexical / exact_bonus の重みを変更して total_score を再計算します。")
+    st.caption("theme / field / lexical のみを重み変更します。一致ボーナスは重み対象に含めず、そのまま加点します。")
 
     weight_theme = st.number_input(
         "テーマ類似重み (theme_score)",
         min_value=0.0,
         max_value=10.0,
-        value=0.60,
+        value=0.45,
         step=0.05,
         format="%.2f",
     )
@@ -333,27 +462,27 @@ with st.sidebar:
         "語句スコア重み (lexical_score)",
         min_value=0.0,
         max_value=10.0,
-        value=0.10,
+        value=0.20,
         step=0.05,
         format="%.2f",
     )
-    weight_bonus = st.number_input(
-        "一致ボーナス重み (exact_bonus)",
+    cohort_zscore_weight = st.number_input(
+        "cohort補正重み (calibrated_score)",
         min_value=0.0,
         max_value=10.0,
-        value=1.00,
+        value=0.15,
         step=0.05,
         format="%.2f",
     )
 
     use_reweighted_total = st.checkbox(
-        "重み変更後の total_score を使う",
+        "この画面では再計算した total_score を使う",
         value=True,
     )
 
 
 # =========================================================
-# Filter selected student
+# Selected student
 # =========================================================
 student_scores = scores[scores[score_student_col] == selected_student].copy()
 
@@ -362,9 +491,8 @@ if student_scores.empty:
     st.stop()
 
 student_info_df = students_df[students_df[student_name_col] == selected_student]
-committee_info_df = committee_df[
-    committee_df[first_existing(committee_df, ["student_name", "name"], "student_name")] == selected_student
-]
+committee_key_col = first_existing(committee_df, ["student_name", "name"], "student_name")
+committee_info_df = committee_df[committee_df[committee_key_col] == selected_student]
 
 if student_info_df.empty or committee_info_df.empty:
     st.warning("学生情報または委員会情報が見つかりません。")
@@ -375,13 +503,12 @@ committee_info = committee_info_df.iloc[0]
 
 
 # =========================================================
-# Recompute weighted score
+# Recompute total score
 # =========================================================
 weights_raw = {
     "theme_score": float(weight_theme),
     "field_score": float(weight_field),
     "lexical_score": float(weight_lexical),
-    "exact_bonus": float(weight_bonus),
 }
 weights_norm = normalize_weights(weights_raw)
 
@@ -390,24 +517,64 @@ student_scores["field_score_f"] = ensure_numeric(student_scores, "field_score")
 student_scores["lexical_score_f"] = ensure_numeric(student_scores, "lexical_score")
 student_scores["exact_bonus_f"] = ensure_numeric(student_scores, "exact_bonus")
 
-student_scores["reweighted_total_score"] = (
+# 一致ボーナスは重みに含めず、そのまま加点
+student_scores["base_score_reweighted"] = (
     student_scores["theme_score_f"] * weights_norm["theme_score"]
     + student_scores["field_score_f"] * weights_norm["field_score"]
     + student_scores["lexical_score_f"] * weights_norm["lexical_score"]
-    + student_scores["exact_bonus_f"] * weights_norm["exact_bonus"]
+    + student_scores["exact_bonus_f"]
+)
+
+# zip内の rowwise_zscore -> minmax と近い形
+student_scores["calibrated_score_reweighted"] = rowwise_minmax_zscore_like(
+    student_scores["base_score_reweighted"]
+)
+
+student_scores["total_score_reweighted"] = (
+    student_scores["base_score_reweighted"]
+    + float(cohort_zscore_weight) * student_scores["calibrated_score_reweighted"]
 )
 
 if use_reweighted_total:
-    student_scores["display_total_score"] = student_scores["reweighted_total_score"]
+    student_scores["display_total_score"] = student_scores["total_score_reweighted"]
+    student_scores["display_calibrated_score"] = student_scores["calibrated_score_reweighted"]
 else:
     student_scores["display_total_score"] = ensure_numeric(student_scores, "total_score")
+    if "calibrated_score" in student_scores.columns:
+        student_scores["display_calibrated_score"] = ensure_numeric(student_scores, "calibrated_score")
+    else:
+        student_scores["display_calibrated_score"] = 0.0
 
 student_scores = student_scores.sort_values(
-    by=["display_total_score", "teacher_name"] if "teacher_name" in student_scores.columns else ["display_total_score"],
-    ascending=[False, True] if "teacher_name" in student_scores.columns else [False],
+    by=["display_total_score", score_teacher_col] if score_teacher_col in student_scores.columns else ["display_total_score"],
+    ascending=[False, True] if score_teacher_col in student_scores.columns else [False],
 ).reset_index(drop=True)
 
 student_scores["display_rank"] = student_scores.index + 1
+
+
+# =========================================================
+# Exact matched words
+# =========================================================
+student_fields = get_fields_from_row(student_info)
+
+teacher_lookup: dict[str, pd.Series] = {}
+for _, row in teachers_df.iterrows():
+    teacher_lookup[safe_str(row.get(teacher_name_col)).strip()] = row
+
+matched_words_col: list[str] = []
+matched_count_col: list[int] = []
+
+for _, srow in student_scores.iterrows():
+    teacher_name = safe_str(srow.get(score_teacher_col)).strip()
+    teacher_row = teacher_lookup.get(teacher_name)
+    teacher_fields = get_fields_from_row(teacher_row) if teacher_row is not None else []
+    matched_words = compute_exact_matches(student_fields, teacher_fields)
+    matched_words_col.append(" / ".join(matched_words))
+    matched_count_col.append(len(matched_words))
+
+student_scores["matched_words"] = matched_words_col
+student_scores["matched_count"] = matched_count_col
 
 
 # =========================================================
@@ -438,10 +605,11 @@ st.markdown('<div class="section-title" style="margin-top:0;">現在の重み / 
 st.write(
     f"theme = **{weights_norm['theme_score']:.3f}** / "
     f"field = **{weights_norm['field_score']:.3f}** / "
-    f"lexical = **{weights_norm['lexical_score']:.3f}** / "
-    f"exact_bonus = **{weights_norm['exact_bonus']:.3f}**"
+    f"lexical = **{weights_norm['lexical_score']:.3f}**"
 )
-st.caption("入力値は合計1でなくてよく、内部で比率に正規化して再計算します。")
+st.write("一致ボーナスは **重み付けせずにそのまま加点** します。")
+st.write(f"cohort補正重み = **{float(cohort_zscore_weight):.3f}**")
+st.caption("再計算式: weighted(theme, field, lexical) + exact_bonus + cohort補正")
 st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -460,6 +628,9 @@ with left_top:
     render_field("修論テーマ", value_from_row(student_info, ["thesis_title", "theme", "title"]))
     render_field("研究分野候補", value_from_row(student_info, ["research_fields", "research_field", "field"]))
 
+    st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
+    render_tags(student_fields)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 with right_top:
@@ -474,18 +645,18 @@ with right_top:
 
 
 # =========================================================
-# Results list: show ALL
+# Results list
 # =========================================================
 st.markdown('<div class="section-title">候補一覧 / Results List（全件表示）</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="small-note">上位候補のみではなく、その学生に対する全教員候補を表示しています。重み変更後の total_score でも並び替えできます。</div>',
+    '<div class="small-note">一致ワード列を追加しています。一致ボーナスは重み付けせず、そのまま加点しています。</div>',
     unsafe_allow_html=True,
 )
 
 display_df = student_scores.copy()
 
-# 表示用の総合スコア列を差し替え
 display_df["total_score"] = display_df["display_total_score"]
+display_df["calibrated_score"] = display_df["display_calibrated_score"]
 
 display_cols = [
     "display_rank",
@@ -495,6 +666,9 @@ display_cols = [
     "field_score",
     "lexical_score",
     "exact_bonus",
+    "matched_count",
+    "matched_words",
+    "calibrated_score",
 ]
 existing_cols = [c for c in display_cols if c in display_df.columns]
 
@@ -502,7 +676,7 @@ column_config = {}
 if "display_rank" in existing_cols:
     column_config["display_rank"] = st.column_config.NumberColumn("順位", format="%d")
 if "teacher_name" in existing_cols:
-    column_config["teacher_name"] = st.column_config.TextColumn("教員名")
+    column_config["teacher_name"] = st.column_config.TextColumn("教員名", width="medium")
 if "total_score" in existing_cols:
     column_config["total_score"] = st.column_config.NumberColumn("総合スコア", format="%.4f")
 if "theme_score" in existing_cols:
@@ -513,12 +687,18 @@ if "lexical_score" in existing_cols:
     column_config["lexical_score"] = st.column_config.NumberColumn("語句スコア", format="%.4f")
 if "exact_bonus" in existing_cols:
     column_config["exact_bonus"] = st.column_config.NumberColumn("一致ボーナス", format="%.4f")
+if "matched_count" in existing_cols:
+    column_config["matched_count"] = st.column_config.NumberColumn("一致数", format="%d")
+if "matched_words" in existing_cols:
+    column_config["matched_words"] = st.column_config.TextColumn("一致ワード", width="large")
+if "calibrated_score" in existing_cols:
+    column_config["calibrated_score"] = st.column_config.NumberColumn("cohort補正値", format="%.4f")
 
 st.dataframe(
     display_df[existing_cols],
     use_container_width=True,
     hide_index=True,
-    height=700,
+    height=720,
     column_config=column_config,
 )
 
@@ -549,6 +729,11 @@ if teacher_info_df.empty:
     st.stop()
 
 teacher_info = teacher_info_df.iloc[0]
+teacher_fields_selected = get_fields_from_row(teacher_info)
+matched_words_selected = compute_exact_matches(student_fields, teacher_fields_selected)
+
+selected_teacher_score_df = display_df[display_df[score_teacher_col].astype(str) == str(selected_teacher)]
+selected_teacher_score = selected_teacher_score_df.iloc[0] if not selected_teacher_score_df.empty else None
 
 
 # =========================================================
@@ -565,12 +750,35 @@ with detail_left:
     render_field("職名", value_from_row(teacher_info, ["position", "title"]))
     render_field("研究分野候補", value_from_row(teacher_info, ["research_fields", "research_field"]))
 
+    st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
+    render_tags(teacher_fields_selected)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 with detail_right:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="pill">External / Metadata</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pill">Score Breakdown</div>', unsafe_allow_html=True)
 
+    if selected_teacher_score is not None:
+        render_field("順位", int(selected_teacher_score["display_rank"]))
+        render_field("総合スコア", f'{float(selected_teacher_score["display_total_score"]):.4f}')
+        render_field("テーマ類似", f'{float(selected_teacher_score["theme_score_f"]):.4f}')
+        render_field("分野類似", f'{float(selected_teacher_score["field_score_f"]):.4f}')
+        render_field("語句スコア", f'{float(selected_teacher_score["lexical_score_f"]):.4f}')
+        render_field("一致ボーナス", f'{float(selected_teacher_score["exact_bonus_f"]):.4f}')
+        render_field("一致ワード", " / ".join(matched_words_selected) if matched_words_selected else "なし")
+    else:
+        render_field("順位", "なし")
+        render_field("総合スコア", "なし")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+st.markdown('<div class="card-soft">', unsafe_allow_html=True)
+st.markdown('<div class="section-title" style="margin-top:0;">External / TRIOS-based Information</div>', unsafe_allow_html=True)
+
+info_col1, info_col2 = st.columns(2)
+with info_col1:
     trios_url = value_from_row(teacher_info, ["trios_url"])
     if trios_url:
         st.markdown(
@@ -584,18 +792,11 @@ with detail_right:
         render_field("TRIOS URL", "なし")
 
     render_field("TRIOS 取得状態", value_from_row(teacher_info, ["trios_status"]))
-    render_field("過去修論テーマ", value_from_row(teacher_info, ["past_thesis_titles"]))
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown('<div class="card-soft">', unsafe_allow_html=True)
-st.markdown('<div class="section-title" style="margin-top:0;">TRIOS由来の情報 / TRIOS-based Information</div>', unsafe_allow_html=True)
-
-info_col1, info_col2 = st.columns(2)
-with info_col1:
     render_field("研究課題", value_from_row(teacher_info, ["trios_topics"]))
+
 with info_col2:
     render_field("論文タイトル", value_from_row(teacher_info, ["trios_papers"]))
+    render_field("過去修論テーマ", value_from_row(teacher_info, ["past_thesis_titles"]))
 
 st.markdown("</div>", unsafe_allow_html=True)
 
