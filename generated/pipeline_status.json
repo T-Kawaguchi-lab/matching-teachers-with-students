@@ -1,33 +1,28 @@
 {
-
-  "teacher_count": 2,
-  "student_count": 2,
-  "embedding_model": "intfloat/multilingual-e5-large",
-  "outputs": {
-    "teachers_enriched": "/mnt/data/committee_matching_system/generated/teachers_enriched.xlsx",
-    "students_enriched": "/mnt/data/committee_matching_system/generated/students_enriched.xlsx",
-    "committee_recommendations": "/mnt/data/committee_matching_system/generated/committee_recommendations.xlsx",
-    "similarity_detailed": "/mnt/data/committee_matching_system/generated/student_teacher_similarity_detailed.xlsx",
-    "teacher_teacher_similarity": "/mnt/data/committee_matching_system/generated/teacher_teacher_similarity.xlsx",
-    "scores_csv": "/mnt/data/committee_matching_system/generated/student_teacher_scores_long.csv"
-  },
-  "git_add": "git repository not found; skipped git add"
-
-  "mode": "teacher_only",
-  "teacher_count": 2,
-  "student_count": 0,
+  "mode": "full",
+  "teacher_count": 28,
+  "student_count": 25,
   "embedding_model": "intfloat/multilingual-e5-base",
-  "can_score": false,
-  "message": "teacher data enriched and saved. waiting for student input to run matching.",
+  "can_score": true,
+  "message": "teacher and student data were both available. matching finished successfully.",
   "input_files": {
     "teacher": {
-      "path": "/mnt/data/work_new/committee_matching_system/incoming/teachers_latest.xlsx",
-      "modified_at": "2026-03-27T11:42:23",
-      "size_bytes": 5225
+      "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/teachers_latest.xlsx",
+      "modified_at": "2026-03-27T18:25:38",
+      "size_bytes": 5662
+    },
+    "student": {
+      "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/students_latest.xlsx",
+      "modified_at": "2026-03-27T18:25:38",
+      "size_bytes": 7356
     }
   },
   "outputs": {
-    "teachers_enriched": "/mnt/data/work_new/committee_matching_system/generated/teachers_enriched.xlsx"
+    "teachers_enriched": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/generated/teachers_enriched.xlsx",
+    "students_enriched": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/generated/students_enriched.xlsx",
+    "committee_recommendations": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/generated/committee_recommendations.xlsx",
+    "similarity_detailed": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/generated/student_teacher_similarity_detailed.xlsx",
+    "teacher_teacher_similarity": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/generated/teacher_teacher_similarity.xlsx",
+    "scores_csv": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/generated/student_teacher_scores_long.csv"
   }
-
 }
