@@ -200,7 +200,9 @@ def first_existing(df: pd.DataFrame, candidates: list[str], default: str = "") -
     return default
 
 
-def value_from_row(row: pd.Series, candidates: list[str], default: str = "") -> str:
+def value_from_row(row: pd.Series | None, candidates: list[str], default: str = "") -> str:
+    if row is None:
+        return default
     for c in candidates:
         if c in row.index:
             return safe_str(row.get(c, default))
@@ -300,7 +302,9 @@ def parse_listlike(value: Any) -> list[str]:
     return out
 
 
-def get_fields_from_row(row: pd.Series) -> list[str]:
+def get_fields_from_row(row: pd.Series | None) -> list[str]:
+    if row is None:
+        return []
     candidates = [
         "research_fields",
         "research_fields_text",
@@ -315,19 +319,19 @@ def get_fields_from_row(row: pd.Series) -> list[str]:
     return []
 
 
-def compute_exact_matches(student_fields: Iterable[str], teacher_fields: Iterable[str]) -> list[str]:
-    teacher_map: dict[str, str] = {}
-    for t in teacher_fields:
-        key = normalize_text_token(t)
-        if key and key not in teacher_map:
-            teacher_map[key] = safe_str(t).strip()
+def compute_exact_matches(base_fields: Iterable[str], other_fields: Iterable[str]) -> list[str]:
+    other_map: dict[str, str] = {}
+    for item in other_fields:
+        key = normalize_text_token(item)
+        if key and key not in other_map:
+            other_map[key] = safe_str(item).strip()
 
     matches: list[str] = []
     seen = set()
-    for s in student_fields:
-        key = normalize_text_token(s)
-        if key and key in teacher_map and key not in seen:
-            matches.append(teacher_map[key] or safe_str(s).strip())
+    for item in base_fields:
+        key = normalize_text_token(item)
+        if key and key in other_map and key not in seen:
+            matches.append(other_map[key] or safe_str(item).strip())
             seen.add(key)
     return matches
 
@@ -340,12 +344,118 @@ def render_tags(tags: list[str]) -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
+def build_row_lookup(df: pd.DataFrame, name_col: str) -> dict[str, pd.Series]:
+    lookup: dict[str, pd.Series] = {}
+    if name_col not in df.columns:
+        return lookup
+    for _, row in df.iterrows():
+        lookup[safe_str(row.get(name_col)).strip()] = row
+    return lookup
+
+
+def prepare_scores(
+    score_df: pd.DataFrame,
+    name_col: str,
+    counterpart_lookup: dict[str, pd.Series],
+    base_fields: list[str],
+    weights_norm: dict[str, float],
+    use_reweighted_total: bool,
+) -> pd.DataFrame:
+    out = score_df.copy()
+
+    out["theme_score_f"] = ensure_numeric(out, "theme_score")
+    out["field_score_f"] = ensure_numeric(out, "field_score")
+    out["exact_bonus_f"] = ensure_numeric(out, "exact_bonus")
+
+    out["total_score_reweighted"] = (
+        out["theme_score_f"] * weights_norm["theme_score"]
+        + out["field_score_f"] * weights_norm["field_score"]
+        + out["exact_bonus_f"]
+    )
+
+    if use_reweighted_total:
+        out["display_total_score"] = out["total_score_reweighted"]
+    else:
+        out["display_total_score"] = ensure_numeric(out, "total_score")
+
+    matched_words_col: list[str] = []
+    matched_count_col: list[int] = []
+    for _, row in out.iterrows():
+        counterpart_name = safe_str(row.get(name_col)).strip()
+        counterpart_row = counterpart_lookup.get(counterpart_name)
+        counterpart_fields = get_fields_from_row(counterpart_row)
+        matched_words = compute_exact_matches(base_fields, counterpart_fields)
+        matched_words_col.append(" / ".join(matched_words))
+        matched_count_col.append(len(matched_words))
+
+    out["matched_words"] = matched_words_col
+    out["matched_count"] = matched_count_col
+
+    sort_cols = ["display_total_score"]
+    ascending = [False]
+    if name_col in out.columns:
+        sort_cols.append(name_col)
+        ascending.append(True)
+
+    out = out.sort_values(by=sort_cols, ascending=ascending).reset_index(drop=True)
+    out["display_rank"] = out.index + 1
+    return out
+
+
+def get_teacher_role_in_committee(committee_row: pd.Series | None, teacher_name: str) -> str:
+    if committee_row is None:
+        return "委員会情報なし"
+    teacher_name = safe_str(teacher_name).strip()
+    if not teacher_name:
+        return "なし"
+    role_map = {
+        "main_advisor": "主指導教員",
+        "sub_advisor_1": "副指導教員1",
+        "sub_advisor_2": "副指導教員2",
+    }
+    for col, label in role_map.items():
+        if safe_str(committee_row.get(col)).strip() == teacher_name:
+            return label
+    return "委員会候補外"
+
+
+def render_teacher_external_info(teacher_info: pd.Series) -> None:
+    st.markdown('<div class="card-soft">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title" style="margin-top:0;">External / TRIOS-based Information</div>',
+        unsafe_allow_html=True,
+    )
+
+    info_col1, info_col2 = st.columns(2)
+    with info_col1:
+        trios_url = value_from_row(teacher_info, ["trios_url"])
+        if trios_url:
+            st.markdown(
+                f"""
+                <div class="label">TRIOS URL</div>
+                <div class="value"><a href="{trios_url}" target="_blank">{trios_url}</a></div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            render_field("TRIOS URL", "なし")
+
+        render_field("TRIOS 取得状態", value_from_row(teacher_info, ["trios_status"]))
+        render_field("研究課題", value_from_row(teacher_info, ["trios_topics"]))
+
+    with info_col2:
+        render_field("論文タイトル", value_from_row(teacher_info, ["trios_papers"]))
+        render_field("過去修論テーマ", value_from_row(teacher_info, ["past_thesis_titles"]))
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 # =========================================================
 # Header
 # =========================================================
 st.markdown('<div class="main-title">修論テーマ × 教員マッチング UI</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">全候補教員を表示し、重み変更・一致ワード表示に対応した版です。</div>',
+    '<div class="sub-title">学生→教員推薦と、教員→学生一覧の両方に対応した版です。</div>',
     unsafe_allow_html=True,
 )
 
@@ -391,15 +501,28 @@ student_name_col = first_existing(students_df, ["student_name", "name"], "studen
 teacher_name_col = first_existing(teachers_df, ["teacher_name", "name"], "teacher_name")
 score_student_col = first_existing(scores, ["student_name"], "student_name")
 score_teacher_col = first_existing(scores, ["teacher_name"], "teacher_name")
+committee_key_col = first_existing(committee_df, ["student_name", "name"], "student_name")
 
 if score_student_col not in scores.columns:
     st.error("scores データに student_name 列が見つかりません。")
     st.stop()
+if score_teacher_col not in scores.columns:
+    st.error("scores データに teacher_name 列が見つかりません。")
+    st.stop()
 
 student_names = sorted(scores[score_student_col].dropna().astype(str).unique().tolist())
+teacher_names = sorted(scores[score_teacher_col].dropna().astype(str).unique().tolist())
+
 if not student_names:
     st.warning("推薦対象の学生データがまだありません。")
     st.stop()
+if not teacher_names:
+    st.warning("推薦対象の教員データがまだありません。")
+    st.stop()
+
+student_lookup = build_row_lookup(students_df, student_name_col)
+teacher_lookup = build_row_lookup(teachers_df, teacher_name_col)
+committee_lookup = build_row_lookup(committee_df, committee_key_col)
 
 
 # =========================================================
@@ -407,7 +530,24 @@ if not student_names:
 # =========================================================
 with st.sidebar:
     st.header("表示設定")
-    selected_student = st.selectbox("学生を選択", student_names)
+
+    view_mode = st.radio(
+        "表示モード",
+        ["学生から教員を探す", "教員から学生を探す"],
+        index=0,
+    )
+
+    selected_student = st.selectbox(
+        "学生を選択",
+        student_names,
+        disabled=view_mode != "学生から教員を探す",
+    )
+    selected_teacher_sidebar = st.selectbox(
+        "教員を選択",
+        teacher_names,
+        disabled=view_mode != "教員から学生を探す",
+    )
+
     show_full_data = st.checkbox("全体データを表示", value=False)
 
     st.markdown("---")
@@ -436,94 +576,18 @@ with st.sidebar:
         value=True,
     )
 
-
-# =========================================================
-# Selected student
-# =========================================================
-student_scores = scores[scores[score_student_col] == selected_student].copy()
-
-if student_scores.empty:
-    st.warning("この学生の候補データがありません。")
-    st.stop()
-
-student_info_df = students_df[students_df[student_name_col] == selected_student]
-committee_key_col = first_existing(committee_df, ["student_name", "name"], "student_name")
-committee_info_df = committee_df[committee_df[committee_key_col] == selected_student]
-
-if student_info_df.empty or committee_info_df.empty:
-    st.warning("学生情報または委員会情報が見つかりません。")
-    st.stop()
-
-student_info = student_info_df.iloc[0]
-committee_info = committee_info_df.iloc[0]
-
-
-# =========================================================
-# Recompute total score
-# =========================================================
 weights_raw = {
     "theme_score": float(weight_theme),
     "field_score": float(weight_field),
 }
 weights_norm = normalize_weights(weights_raw)
 
-student_scores["theme_score_f"] = ensure_numeric(student_scores, "theme_score")
-student_scores["field_score_f"] = ensure_numeric(student_scores, "field_score")
-student_scores["exact_bonus_f"] = ensure_numeric(student_scores, "exact_bonus")
-
-student_scores["total_score_reweighted"] = (
-    student_scores["theme_score_f"] * weights_norm["theme_score"]
-    + student_scores["field_score_f"] * weights_norm["field_score"]
-    + student_scores["exact_bonus_f"]
-)
-
-if use_reweighted_total:
-    student_scores["display_total_score"] = student_scores["total_score_reweighted"]
-else:
-    student_scores["display_total_score"] = ensure_numeric(student_scores, "total_score")
-
-student_scores = student_scores.sort_values(
-    by=["display_total_score", score_teacher_col] if score_teacher_col in student_scores.columns else ["display_total_score"],
-    ascending=[False, True] if score_teacher_col in student_scores.columns else [False],
-).reset_index(drop=True)
-
-student_scores["display_rank"] = student_scores.index + 1
-
-
-# =========================================================
-# Exact matched words
-# =========================================================
-student_fields = get_fields_from_row(student_info)
-
-teacher_lookup: dict[str, pd.Series] = {}
-for _, row in teachers_df.iterrows():
-    teacher_lookup[safe_str(row.get(teacher_name_col)).strip()] = row
-
-matched_words_col: list[str] = []
-matched_count_col: list[int] = []
-
-for _, srow in student_scores.iterrows():
-    teacher_name = safe_str(srow.get(score_teacher_col)).strip()
-    teacher_row = teacher_lookup.get(teacher_name)
-    teacher_fields = get_fields_from_row(teacher_row) if teacher_row is not None else []
-    matched_words = compute_exact_matches(student_fields, teacher_fields)
-    matched_words_col.append(" / ".join(matched_words))
-    matched_count_col.append(len(matched_words))
-
-student_scores["matched_words"] = matched_words_col
-student_scores["matched_count"] = matched_count_col
-
 
 # =========================================================
 # Top metrics
 # =========================================================
 total_students = len(student_names)
-total_teachers = (
-    teachers_df[teacher_name_col].dropna().astype(str).nunique()
-    if teacher_name_col in teachers_df.columns
-    else len(teachers_df)
-)
-candidate_count = len(student_scores)
+total_teachers = len(teacher_names)
 
 m1, m2, m3 = st.columns(3)
 with m1:
@@ -531,7 +595,11 @@ with m1:
 with m2:
     render_metric_card("教員数", total_teachers, "候補教員データ")
 with m3:
-    render_metric_card("表示候補数", candidate_count, f"{selected_student} さん向け（全件表示）")
+    render_metric_card(
+        "表示モード",
+        "学生→教員" if view_mode == "学生から教員を探す" else "教員→学生",
+        "表示対象をサイドバーで切替可能",
+    )
 
 
 # =========================================================
@@ -549,182 +617,365 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================================================
-# Main selector area
+# Student -> Teacher mode
 # =========================================================
-st.markdown('<div class="section-title">学生入力データ / Input Data</div>', unsafe_allow_html=True)
+if view_mode == "学生から教員を探す":
+    student_scores = scores[scores[score_student_col].astype(str) == str(selected_student)].copy()
 
-left_top, right_top = st.columns([1.45, 1.0])
+    if student_scores.empty:
+        st.warning("この学生の候補データがありません。")
+        st.stop()
 
-with left_top:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="pill">Student Profile</div>', unsafe_allow_html=True)
+    student_info = student_lookup.get(selected_student)
+    committee_info = committee_lookup.get(selected_student)
 
-    render_field("学生名", value_from_row(student_info, ["student_name", "name"]))
-    render_field("修論テーマ", value_from_row(student_info, ["thesis_title", "theme", "title"]))
-    render_field("研究分野候補", value_from_row(student_info, ["research_fields", "research_field", "field"]))
+    if student_info is None:
+        st.warning("学生情報が見つかりません。")
+        st.stop()
 
-    st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
-    render_tags(student_fields)
+    student_fields = get_fields_from_row(student_info)
+    student_scores = prepare_scores(
+        score_df=student_scores,
+        name_col=score_teacher_col,
+        counterpart_lookup=teacher_lookup,
+        base_fields=student_fields,
+        weights_norm=weights_norm,
+        use_reweighted_total=use_reweighted_total,
+    )
 
+    candidate_count = len(student_scores)
+    st.markdown('<div class="section-title">学生入力データ / Input Data</div>', unsafe_allow_html=True)
+
+    left_top, right_top = st.columns([1.45, 1.0])
+
+    with left_top:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Student Profile</div>', unsafe_allow_html=True)
+
+        render_field("学生名", value_from_row(student_info, ["student_name", "name"]))
+        render_field("修論テーマ", value_from_row(student_info, ["thesis_title", "theme", "title"]))
+        render_field("研究分野候補", value_from_row(student_info, ["research_fields", "research_field", "field"]))
+
+        st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
+        render_tags(student_fields)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with right_top:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Recommended Committee</div>', unsafe_allow_html=True)
+
+        render_field("主指導教員", value_from_row(committee_info, ["main_advisor"]))
+        render_field("副指導教員1", value_from_row(committee_info, ["sub_advisor_1"]))
+        render_field("副指導教員2", value_from_row(committee_info, ["sub_advisor_2"]))
+        render_field("表示候補数", candidate_count)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">候補一覧 / Results List（教員を全件表示）</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="small-note">選択した学生に対して、教員を類似度順に並べています。</div>',
+        unsafe_allow_html=True,
+    )
+
+    display_df = student_scores.copy()
+    display_df["total_score"] = display_df["display_total_score"]
+
+    display_cols = [
+        "display_rank",
+        "teacher_name",
+        "total_score",
+        "theme_score",
+        "field_score",
+        "exact_bonus",
+        "matched_count",
+        "matched_words",
+    ]
+    existing_cols = [c for c in display_cols if c in display_df.columns]
+
+    column_config = {}
+    if "display_rank" in existing_cols:
+        column_config["display_rank"] = st.column_config.NumberColumn("順位", format="%d")
+    if "teacher_name" in existing_cols:
+        column_config["teacher_name"] = st.column_config.TextColumn("教員名", width="medium")
+    if "total_score" in existing_cols:
+        column_config["total_score"] = st.column_config.NumberColumn("総合スコア", format="%.4f")
+    if "theme_score" in existing_cols:
+        column_config["theme_score"] = st.column_config.NumberColumn("テーマ類似", format="%.4f")
+    if "field_score" in existing_cols:
+        column_config["field_score"] = st.column_config.NumberColumn("分野類似", format="%.4f")
+    if "exact_bonus" in existing_cols:
+        column_config["exact_bonus"] = st.column_config.NumberColumn("一致ボーナス", format="%.4f")
+    if "matched_count" in existing_cols:
+        column_config["matched_count"] = st.column_config.NumberColumn("一致数", format="%d")
+    if "matched_words" in existing_cols:
+        column_config["matched_words"] = st.column_config.TextColumn("一致ワード", width="large")
+
+    st.dataframe(
+        display_df[existing_cols],
+        use_container_width=True,
+        hide_index=True,
+        height=720,
+        column_config=column_config,
+    )
+
+    csv_download = display_df[existing_cols].to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="この学生の全候補一覧をCSVでダウンロード",
+        data=csv_download,
+        file_name=f"{selected_student}_all_teachers.csv",
+        mime="text/csv",
+    )
+
+    st.markdown('<div class="section-title">候補教員の詳細 / Teacher Detail</div>', unsafe_allow_html=True)
+
+    teacher_options = display_df[score_teacher_col].dropna().astype(str).tolist()
+    selected_teacher_detail = st.selectbox(
+        "教員を選択",
+        teacher_options,
+        key="selected_teacher_detail",
+    )
+
+    teacher_info = teacher_lookup.get(selected_teacher_detail)
+    if teacher_info is None:
+        st.warning("教員詳細が見つかりません。")
+        st.stop()
+
+    teacher_fields_selected = get_fields_from_row(teacher_info)
+    matched_words_selected = compute_exact_matches(student_fields, teacher_fields_selected)
+
+    selected_teacher_score_df = display_df[
+        display_df[score_teacher_col].astype(str) == str(selected_teacher_detail)
+    ]
+    selected_teacher_score = (
+        selected_teacher_score_df.iloc[0] if not selected_teacher_score_df.empty else None
+    )
+
+    detail_left, detail_right = st.columns(2)
+
+    with detail_left:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Basic Information</div>', unsafe_allow_html=True)
+
+        render_field("教員名", value_from_row(teacher_info, ["teacher_name", "name"]))
+        render_field("所属", value_from_row(teacher_info, ["department", "affiliation"]))
+        render_field("職名", value_from_row(teacher_info, ["position", "title"]))
+        render_field("研究分野候補", value_from_row(teacher_info, ["research_fields", "research_field"]))
+
+        st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
+        render_tags(teacher_fields_selected)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with detail_right:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Score Breakdown</div>', unsafe_allow_html=True)
+
+        if selected_teacher_score is not None:
+            render_field("順位", int(selected_teacher_score["display_rank"]))
+            render_field("総合スコア", f'{float(selected_teacher_score["display_total_score"]):.4f}')
+            render_field("テーマ類似", f'{float(selected_teacher_score["theme_score_f"]):.4f}')
+            render_field("分野類似", f'{float(selected_teacher_score["field_score_f"]):.4f}')
+            render_field("一致ボーナス", f'{float(selected_teacher_score["exact_bonus_f"]):.4f}')
+            render_field("一致ワード", " / ".join(matched_words_selected) if matched_words_selected else "なし")
+        else:
+            render_field("順位", "なし")
+            render_field("総合スコア", "なし")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    render_teacher_external_info(teacher_info)
+
+
+# =========================================================
+# Teacher -> Student mode
+# =========================================================
+else:
+    teacher_scores = scores[scores[score_teacher_col].astype(str) == str(selected_teacher_sidebar)].copy()
+
+    if teacher_scores.empty:
+        st.warning("この教員に対応する学生データがありません。")
+        st.stop()
+
+    teacher_info = teacher_lookup.get(selected_teacher_sidebar)
+    if teacher_info is None:
+        st.warning("教員情報が見つかりません。")
+        st.stop()
+
+    teacher_fields = get_fields_from_row(teacher_info)
+    teacher_scores = prepare_scores(
+        score_df=teacher_scores,
+        name_col=score_student_col,
+        counterpart_lookup=student_lookup,
+        base_fields=teacher_fields,
+        weights_norm=weights_norm,
+        use_reweighted_total=use_reweighted_total,
+    )
+
+    candidate_count = len(teacher_scores)
+    st.markdown('<div class="section-title">教員入力データ / Teacher Profile</div>', unsafe_allow_html=True)
+
+    left_top, right_top = st.columns([1.2, 1.25])
+
+    with left_top:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Teacher Profile</div>', unsafe_allow_html=True)
+
+        render_field("教員名", value_from_row(teacher_info, ["teacher_name", "name"]))
+        render_field("所属", value_from_row(teacher_info, ["department", "affiliation"]))
+        render_field("職名", value_from_row(teacher_info, ["position", "title"]))
+        render_field("研究分野候補", value_from_row(teacher_info, ["research_fields", "research_field"]))
+
+        st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
+        render_tags(teacher_fields)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with right_top:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Overview</div>', unsafe_allow_html=True)
+
+        render_field("表示学生数", candidate_count)
+        render_field("テーマ類似重み", f"{weights_norm['theme_score']:.3f}")
+        render_field("分野類似重み", f"{weights_norm['field_score']:.3f}")
+        render_field("スコア表示", "再計算 total_score" if use_reweighted_total else "元の total_score")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="section-title">学生一覧 / Results List（学生を全件表示）</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="small-note">選択した教員に対して、学生を類似度順に並べています。</div>',
+        unsafe_allow_html=True,
+    )
+
+    display_df = teacher_scores.copy()
+    display_df["total_score"] = display_df["display_total_score"]
+
+    display_cols = [
+        "display_rank",
+        "student_name",
+        "thesis_title",
+        "total_score",
+        "theme_score",
+        "field_score",
+        "exact_bonus",
+        "matched_count",
+        "matched_words",
+    ]
+    existing_cols = [c for c in display_cols if c in display_df.columns]
+
+    column_config = {}
+    if "display_rank" in existing_cols:
+        column_config["display_rank"] = st.column_config.NumberColumn("順位", format="%d")
+    if "student_name" in existing_cols:
+        column_config["student_name"] = st.column_config.TextColumn("学生名", width="medium")
+    if "thesis_title" in existing_cols:
+        column_config["thesis_title"] = st.column_config.TextColumn("修論テーマ", width="large")
+    if "total_score" in existing_cols:
+        column_config["total_score"] = st.column_config.NumberColumn("総合スコア", format="%.4f")
+    if "theme_score" in existing_cols:
+        column_config["theme_score"] = st.column_config.NumberColumn("テーマ類似", format="%.4f")
+    if "field_score" in existing_cols:
+        column_config["field_score"] = st.column_config.NumberColumn("分野類似", format="%.4f")
+    if "exact_bonus" in existing_cols:
+        column_config["exact_bonus"] = st.column_config.NumberColumn("一致ボーナス", format="%.4f")
+    if "matched_count" in existing_cols:
+        column_config["matched_count"] = st.column_config.NumberColumn("一致数", format="%d")
+    if "matched_words" in existing_cols:
+        column_config["matched_words"] = st.column_config.TextColumn("一致ワード", width="large")
+
+    st.dataframe(
+        display_df[existing_cols],
+        use_container_width=True,
+        hide_index=True,
+        height=720,
+        column_config=column_config,
+    )
+
+    csv_download = display_df[existing_cols].to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        label="この教員に対する全学生一覧をCSVでダウンロード",
+        data=csv_download,
+        file_name=f"{selected_teacher_sidebar}_all_students.csv",
+        mime="text/csv",
+    )
+
+    st.markdown('<div class="section-title">候補学生の詳細 / Student Detail</div>', unsafe_allow_html=True)
+
+    student_options = display_df[score_student_col].dropna().astype(str).tolist()
+    selected_student_detail = st.selectbox(
+        "学生を選択",
+        student_options,
+        key="selected_student_detail",
+    )
+
+    student_info = student_lookup.get(selected_student_detail)
+    committee_info = committee_lookup.get(selected_student_detail)
+
+    if student_info is None:
+        st.warning("学生詳細が見つかりません。")
+        st.stop()
+
+    student_fields = get_fields_from_row(student_info)
+    matched_words_selected = compute_exact_matches(teacher_fields, student_fields)
+
+    selected_student_score_df = display_df[
+        display_df[score_student_col].astype(str) == str(selected_student_detail)
+    ]
+    selected_student_score = (
+        selected_student_score_df.iloc[0] if not selected_student_score_df.empty else None
+    )
+
+    detail_left, detail_right = st.columns(2)
+
+    with detail_left:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Student Information</div>', unsafe_allow_html=True)
+
+        render_field("学生名", value_from_row(student_info, ["student_name", "name"]))
+        render_field("所属", value_from_row(student_info, ["department", "affiliation"]))
+        render_field("修論テーマ", value_from_row(student_info, ["thesis_title", "theme", "title"]))
+        render_field("研究分野候補", value_from_row(student_info, ["research_fields", "research_field", "field"]))
+
+        st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
+        render_tags(student_fields)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with detail_right:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="pill">Score Breakdown</div>', unsafe_allow_html=True)
+
+        if selected_student_score is not None:
+            render_field("順位", int(selected_student_score["display_rank"]))
+            render_field("総合スコア", f'{float(selected_student_score["display_total_score"]):.4f}')
+            render_field("テーマ類似", f'{float(selected_student_score["theme_score_f"]):.4f}')
+            render_field("分野類似", f'{float(selected_student_score["field_score_f"]):.4f}')
+            render_field("一致ボーナス", f'{float(selected_student_score["exact_bonus_f"]):.4f}')
+            render_field("一致ワード", " / ".join(matched_words_selected) if matched_words_selected else "なし")
+            render_field("委員会での位置づけ", get_teacher_role_in_committee(committee_info, selected_teacher_sidebar))
+        else:
+            render_field("順位", "なし")
+            render_field("総合スコア", "なし")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="card-soft">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title" style="margin-top:0;">Selected Student Committee / Recommendation Context</div>',
+        unsafe_allow_html=True,
+    )
+    ctx_col1, ctx_col2 = st.columns(2)
+    with ctx_col1:
+        render_field("主指導教員", value_from_row(committee_info, ["main_advisor"]))
+        render_field("副指導教員1", value_from_row(committee_info, ["sub_advisor_1"]))
+        render_field("副指導教員2", value_from_row(committee_info, ["sub_advisor_2"]))
+    with ctx_col2:
+        render_field("この教員の位置づけ", get_teacher_role_in_committee(committee_info, selected_teacher_sidebar))
+        render_field("選択中の教員", selected_teacher_sidebar)
     st.markdown("</div>", unsafe_allow_html=True)
 
-with right_top:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="pill">Recommended Committee</div>', unsafe_allow_html=True)
-
-    render_field("主指導教員", value_from_row(committee_info, ["main_advisor"]))
-    render_field("副指導教員1", value_from_row(committee_info, ["sub_advisor_1"]))
-    render_field("副指導教員2", value_from_row(committee_info, ["sub_advisor_2"]))
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# =========================================================
-# Results list
-# =========================================================
-st.markdown('<div class="section-title">候補一覧 / Results List（全件表示）</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="small-note">一致ワード列を追加しています。一致ボーナスは重み付けせず、そのまま加点しています。</div>',
-    unsafe_allow_html=True,
-)
-
-display_df = student_scores.copy()
-display_df["total_score"] = display_df["display_total_score"]
-
-display_cols = [
-    "display_rank",
-    "teacher_name",
-    "total_score",
-    "theme_score",
-    "field_score",
-    "exact_bonus",
-    "matched_count",
-    "matched_words",
-]
-existing_cols = [c for c in display_cols if c in display_df.columns]
-
-column_config = {}
-if "display_rank" in existing_cols:
-    column_config["display_rank"] = st.column_config.NumberColumn("順位", format="%d")
-if "teacher_name" in existing_cols:
-    column_config["teacher_name"] = st.column_config.TextColumn("教員名", width="medium")
-if "total_score" in existing_cols:
-    column_config["total_score"] = st.column_config.NumberColumn("総合スコア", format="%.4f")
-if "theme_score" in existing_cols:
-    column_config["theme_score"] = st.column_config.NumberColumn("テーマ類似", format="%.4f")
-if "field_score" in existing_cols:
-    column_config["field_score"] = st.column_config.NumberColumn("分野類似", format="%.4f")
-if "exact_bonus" in existing_cols:
-    column_config["exact_bonus"] = st.column_config.NumberColumn("一致ボーナス", format="%.4f")
-if "matched_count" in existing_cols:
-    column_config["matched_count"] = st.column_config.NumberColumn("一致数", format="%d")
-if "matched_words" in existing_cols:
-    column_config["matched_words"] = st.column_config.TextColumn("一致ワード", width="large")
-
-st.dataframe(
-    display_df[existing_cols],
-    use_container_width=True,
-    hide_index=True,
-    height=720,
-    column_config=column_config,
-)
-
-csv_download = display_df[existing_cols].to_csv(index=False).encode("utf-8-sig")
-st.download_button(
-    label="この学生の全候補一覧をCSVでダウンロード",
-    data=csv_download,
-    file_name=f"{selected_student}_all_candidates.csv",
-    mime="text/csv",
-)
-
-
-# =========================================================
-# Teacher detail selector
-# =========================================================
-st.markdown('<div class="section-title">候補教員の詳細 / Teacher Detail</div>', unsafe_allow_html=True)
-
-teacher_options = display_df[score_teacher_col].dropna().astype(str).tolist()
-selected_teacher = st.selectbox(
-    "教員を選択",
-    teacher_options,
-    key="selected_teacher_detail",
-)
-
-teacher_info_df = teachers_df[teachers_df[teacher_name_col] == selected_teacher]
-if teacher_info_df.empty:
-    st.warning("教員詳細が見つかりません。")
-    st.stop()
-
-teacher_info = teacher_info_df.iloc[0]
-teacher_fields_selected = get_fields_from_row(teacher_info)
-matched_words_selected = compute_exact_matches(student_fields, teacher_fields_selected)
-
-selected_teacher_score_df = display_df[display_df[score_teacher_col].astype(str) == str(selected_teacher)]
-selected_teacher_score = selected_teacher_score_df.iloc[0] if not selected_teacher_score_df.empty else None
-
-
-# =========================================================
-# Teacher detail cards
-# =========================================================
-detail_left, detail_right = st.columns(2)
-
-with detail_left:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="pill">Basic Information</div>', unsafe_allow_html=True)
-
-    render_field("教員名", value_from_row(teacher_info, ["teacher_name", "name"]))
-    render_field("所属", value_from_row(teacher_info, ["department", "affiliation"]))
-    render_field("職名", value_from_row(teacher_info, ["position", "title"]))
-    render_field("研究分野候補", value_from_row(teacher_info, ["research_fields", "research_field"]))
-
-    st.markdown('<div class="label">研究分野タグ</div>', unsafe_allow_html=True)
-    render_tags(teacher_fields_selected)
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with detail_right:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown('<div class="pill">Score Breakdown</div>', unsafe_allow_html=True)
-
-    if selected_teacher_score is not None:
-        render_field("順位", int(selected_teacher_score["display_rank"]))
-        render_field("総合スコア", f'{float(selected_teacher_score["display_total_score"]):.4f}')
-        render_field("テーマ類似", f'{float(selected_teacher_score["theme_score_f"]):.4f}')
-        render_field("分野類似", f'{float(selected_teacher_score["field_score_f"]):.4f}')
-        render_field("一致ボーナス", f'{float(selected_teacher_score["exact_bonus_f"]):.4f}')
-        render_field("一致ワード", " / ".join(matched_words_selected) if matched_words_selected else "なし")
-    else:
-        render_field("順位", "なし")
-        render_field("総合スコア", "なし")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-st.markdown('<div class="card-soft">', unsafe_allow_html=True)
-st.markdown('<div class="section-title" style="margin-top:0;">External / TRIOS-based Information</div>', unsafe_allow_html=True)
-
-info_col1, info_col2 = st.columns(2)
-with info_col1:
-    trios_url = value_from_row(teacher_info, ["trios_url"])
-    if trios_url:
-        st.markdown(
-            f"""
-            <div class="label">TRIOS URL</div>
-            <div class="value"><a href="{trios_url}" target="_blank">{trios_url}</a></div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        render_field("TRIOS URL", "なし")
-
-    render_field("TRIOS 取得状態", value_from_row(teacher_info, ["trios_status"]))
-    render_field("研究課題", value_from_row(teacher_info, ["trios_topics"]))
-
-with info_col2:
-    render_field("論文タイトル", value_from_row(teacher_info, ["trios_papers"]))
-    render_field("過去修論テーマ", value_from_row(teacher_info, ["past_thesis_titles"]))
-
-st.markdown("</div>", unsafe_allow_html=True)
+    render_teacher_external_info(teacher_info)
 
 
 # =========================================================
