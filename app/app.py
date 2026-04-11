@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Set
+from typing import Set
 
 import pandas as pd
 import streamlit as st
@@ -102,10 +102,6 @@ def normalize_text_for_match(text: str) -> str:
 
 
 def split_exact_match_tokens(text: str) -> Set[str]:
-    """
-    完全一致判定用の単語集合。
-    句読点・改行・スラッシュなどで緩く分割するが、部分一致はしない。
-    """
     if not text:
         return set()
 
@@ -172,46 +168,7 @@ def recompute_weighted_scores(
     return out
 
 
-def build_recommendation_from_scores(scores_df: pd.DataFrame, top_k: int = 3) -> pd.DataFrame:
-    if scores_df.empty:
-        return pd.DataFrame()
-
-    rows = []
-
-    for (group, student_name), g in scores_df.groupby(["group", "student_name"], dropna=False):
-        g2 = g.sort_values("weighted_score", ascending=False).reset_index(drop=True)
-        title = g2["title"].iloc[0] if "title" in g2.columns and not g2.empty else ""
-
-        teacher_names = g2["teacher_name"].astype(str).tolist()
-        weighted_scores = g2["weighted_score"].astype(float).tolist()
-
-        while len(teacher_names) < top_k:
-            teacher_names.append("")
-        while len(weighted_scores) < top_k:
-            weighted_scores.append(0.0)
-
-        rows.append(
-            {
-                "group": group,
-                "student_name": student_name,
-                "title": title,
-                "teacher_1": teacher_names[0],
-                "teacher_2": teacher_names[1],
-                "teacher_3": teacher_names[2],
-                "score_1": weighted_scores[0],
-                "score_2": weighted_scores[1],
-                "score_3": weighted_scores[2],
-            }
-        )
-
-    return pd.DataFrame(rows)
-
-
 def extract_teacher_title_append_df(path: Path) -> pd.DataFrame:
-    """
-    追加ファイルから「指導教員」「担当タイトル」だけを抜き出して master_title へ追記するためのDFを作る。
-    列名揺れをある程度吸収する。
-    """
     if not path.exists():
         return pd.DataFrame(columns=["指導教員", "担当タイトル"])
 
@@ -247,7 +204,7 @@ def main() -> None:
     st.markdown(
         """
 <style>
-.block-container {max-width: 1500px; padding-top: 1.2rem;}
+.block-container {max-width: 1600px; padding-top: 1.2rem;}
 .card {border: 1px solid #dde7f3; border-radius: 16px; padding: 16px; background: #fbfdff; margin-bottom: 14px;}
 .metric {border: 1px solid #dde7f3; border-radius: 16px; padding: 14px; background: white;}
 .small {color:#64748b; font-size:0.9rem;}
@@ -363,7 +320,6 @@ def main() -> None:
         scores_df = safe_read_scores_csv(SCORES_CSV)
         scores_df = scores_df[scores_df["group"].astype(str) == str(selected_group)].copy() if not scores_df.empty else pd.DataFrame()
 
-        # 重み
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("重み設定")
 
@@ -386,95 +342,67 @@ def main() -> None:
         st.caption("※ 完全一致する語が1つでもある場合、総合類似度に +0.01 されます。")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        left, right = st.columns([1.0, 1.2])
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("類似度計算結果")
 
-        with left:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.subheader("推薦結果")
+        if not scores_df.empty:
+            weighted_scores_df = recompute_weighted_scores(
+                scores_df,
+                field_weight=field_weight,
+                content_weight=content_weight,
+                exact_match_bonus=0.01,
+            )
 
-            if not scores_df.empty:
-                weighted_scores_df = recompute_weighted_scores(
-                    scores_df,
-                    field_weight=field_weight,
-                    content_weight=content_weight,
-                    exact_match_bonus=0.01,
-                )
-                rec_df = build_recommendation_from_scores(weighted_scores_df, top_k=3)
+            student_names = sorted(
+                weighted_scores_df["student_name"].dropna().astype(str).unique().tolist()
+            )
 
-                if not rec_df.empty:
-                    st.dataframe(rec_df, width="stretch", hide_index=True)
-                else:
-                    st.info("推薦結果を作成できませんでした。")
-            else:
-                rec_df = get_group_df_from_excel(RECOMMEND_XLSX, selected_group)
-                if not rec_df.empty:
-                    st.dataframe(rec_df, width="stretch", hide_index=True)
-                else:
-                    st.info("まだ推薦結果がありません。")
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with right:
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.subheader("詳細類似度（表示する人を選択）")
-
-            if not scores_df.empty:
-                weighted_scores_df = recompute_weighted_scores(
-                    scores_df,
-                    field_weight=field_weight,
-                    content_weight=content_weight,
-                    exact_match_bonus=0.01,
+            if student_names:
+                selected_student = st.selectbox(
+                    "表示する学生を選択",
+                    options=student_names,
+                    key=f"student_filter_{selected_group}",
                 )
 
-                student_names = sorted(
-                    weighted_scores_df["student_name"].dropna().astype(str).unique().tolist()
-                )
+                display_df = weighted_scores_df[
+                    weighted_scores_df["student_name"].astype(str) == str(selected_student)
+                ].copy()
 
-                if student_names:
-                    selected_student = st.selectbox(
-                        "表示する学生を選択",
-                        options=student_names,
-                        key=f"student_filter_{selected_group}",
-                    )
+                display_df = display_df.sort_values("weighted_score", ascending=False).reset_index(drop=True)
+                display_df.insert(0, "順位", range(1, len(display_df) + 1))
 
-                    display_df = weighted_scores_df[
-                        weighted_scores_df["student_name"].astype(str) == str(selected_student)
-                    ].copy()
-
-                    display_df = display_df.sort_values("weighted_score", ascending=False).reset_index(drop=True)
-                    display_df.insert(0, "順位", range(1, len(display_df) + 1))
-
-                    display_cols = [
-                        c
-                        for c in [
-                            "順位",
-                            "student_name",
-                            "title",
-                            "teacher_name",
-                            "weighted_score",
-                            "exact_match_bonus",
-                            "field_score",
-                            "content_score",
-                            "total_score",
-                            "student_field_text",
-                            "teacher_field_text",
-                            "student_content_text",
-                            "teacher_content_text",
-                        ]
-                        if c in display_df.columns
+                display_cols = [
+                    c
+                    for c in [
+                        "順位",
+                        "student_name",
+                        "title",
+                        "teacher_name",
+                        "weighted_score",
+                        "exact_match_bonus",
+                        "field_score",
+                        "content_score",
+                        "total_score",
+                        "student_field_text",
+                        "teacher_field_text",
+                        "student_content_text",
+                        "teacher_content_text",
                     ]
+                    if c in display_df.columns
+                ]
 
-                    st.dataframe(
-                        display_df[display_cols] if display_cols else display_df,
-                        width="stretch",
-                        hide_index=True,
-                    )
-                else:
-                    st.info("表示できる学生がいません。")
+                st.dataframe(
+                    display_df[display_cols] if display_cols else display_df,
+                    width="stretch",
+                    hide_index=True,
+                    height=700,
+                )
             else:
-                st.info("まだ詳細類似度がありません。")
+                st.info("表示できる学生がいません。")
+        else:
+            st.info("まだ類似度計算結果がありません。")
 
-            st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
         lower_left, lower_right = st.columns(2)
 
@@ -501,24 +429,10 @@ def main() -> None:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("ダウンロード")
 
-        col1, col2, col3 = st.columns(3)
-        for col, path, label in [
-            (col1, RECOMMEND_XLSX, "committee_recommendations.xlsx"),
-            (col2, TEACHERS_XLSX, "teachers_enriched.xlsx"),
-            (col3, STUDENTS_XLSX, "students_enriched.xlsx"),
-        ]:
-            if path.exists():
-                col.download_button(
-                    label=label,
-                    data=path.read_bytes(),
-                    file_name=path.name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    width="stretch",
-                )
+        col1, col2 = st.columns(2)
 
         if SCORES_CSV.exists():
-            col4, col5 = st.columns(2)
-            col4.download_button(
+            col1.download_button(
                 "student_teacher_scores_long.csv",
                 SCORES_CSV.read_bytes(),
                 file_name=SCORES_CSV.name,
@@ -526,21 +440,21 @@ def main() -> None:
                 width="stretch",
             )
 
-            if not scores_df.empty:
-                weighted_export_df = recompute_weighted_scores(
-                    scores_df,
-                    field_weight=field_weight,
-                    content_weight=content_weight,
-                    exact_match_bonus=0.01,
-                )
-                csv_bytes = weighted_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-                col5.download_button(
-                    "重み反映後CSVをダウンロード",
-                    csv_bytes,
-                    file_name=f"weighted_scores_{selected_group}.csv",
-                    mime="text/csv",
-                    width="stretch",
-                )
+        if not scores_df.empty:
+            weighted_export_df = recompute_weighted_scores(
+                scores_df,
+                field_weight=field_weight,
+                content_weight=content_weight,
+                exact_match_bonus=0.01,
+            )
+            csv_bytes = weighted_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            col2.download_button(
+                "重み反映後CSVをダウンロード",
+                csv_bytes,
+                file_name=f"weighted_scores_{selected_group}.csv",
+                mime="text/csv",
+                width="stretch",
+            )
 
         st.markdown("</div>", unsafe_allow_html=True)
 
