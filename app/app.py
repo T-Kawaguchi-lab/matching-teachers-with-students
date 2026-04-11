@@ -25,6 +25,7 @@ RECOMMEND_XLSX = GENERATED_DIR / "committee_recommendations.xlsx"
 STUDENTS_XLSX = GENERATED_DIR / "students_enriched.xlsx"
 TEACHERS_XLSX = GENERATED_DIR / "teachers_enriched.xlsx"
 
+st.info("NEW APP MAIN IS RUNNING / これは新しい app.py です")
 
 def save_upload(uploaded_file, target: Path) -> bool:
     if uploaded_file is None:
