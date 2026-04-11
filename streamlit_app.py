@@ -1,15 +1,11 @@
+import importlib
 import streamlit as st
-from pathlib import Path
 
-st.set_page_config(page_title="debug", layout="wide")
+st.set_page_config(page_title="MPPS / MSE 類似度マッチング", layout="wide")
 
-p = Path(__file__).resolve().parent / "app" / "app.py"
-
-st.write("debug mode")
-st.write(f"app.py exists: {p.exists()}")
-st.write(f"path: {p}")
-
-if p.exists():
-    text = p.read_text(encoding="utf-8", errors="replace")
-    st.write("contains def main:", "def main" in text)
-    st.code(text[:3000])
+try:
+    app_module = importlib.import_module("app.app")
+    app_module.main()
+except Exception as exc:
+    st.error("app.app の読み込みまたは main() 実行でエラーが発生しました。")
+    st.exception(exc)
