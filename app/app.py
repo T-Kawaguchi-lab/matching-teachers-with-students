@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Set
+from typing import List, Set, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -102,6 +102,10 @@ def normalize_text_for_match(text: str) -> str:
 
 
 def split_exact_match_tokens(text: str) -> Set[str]:
+    """
+    field_score 用テキストから完全一致判定に使う単語集合を作る。
+    部分一致はせず、区切られた語だけを見る。
+    """
     if not text:
         return set()
 
@@ -119,21 +123,25 @@ def split_exact_match_tokens(text: str) -> Set[str]:
     return set(parts)
 
 
-def has_exact_match(student_field_text: str, teacher_field_text: str) -> bool:
+def get_match_words(student_field_text: str, teacher_field_text: str) -> List[str]:
+    """
+    field_score に使った単語だけで完全一致を調べる。
+    """
     s_tokens = split_exact_match_tokens(student_field_text)
     t_tokens = split_exact_match_tokens(teacher_field_text)
 
     if not s_tokens or not t_tokens:
-        return False
+        return []
 
-    return len(s_tokens & t_tokens) >= 1
+    matched = sorted(s_tokens & t_tokens)
+    return matched
 
 
 def recompute_weighted_scores(
     df: pd.DataFrame,
     field_weight: float,
     content_weight: float,
-    exact_match_bonus: float = 0.01,
+    per_match_bonus: float = 0.005,
 ) -> pd.DataFrame:
     out = df.copy()
 
@@ -149,22 +157,32 @@ def recompute_weighted_scores(
     field_score = pd.to_numeric(out.get("field_score", 0.0), errors="coerce").fillna(0.0)
     content_score = pd.to_numeric(out.get("content_score", 0.0), errors="coerce").fillna(0.0)
 
+    # 再計算前の重み付きベース
     out["weighted_score_base"] = fw * field_score + cw * content_score
 
-    if "student_field_text" in out.columns and "teacher_field_text" in out.columns:
-        out["exact_match_bonus"] = out.apply(
-            lambda r: exact_match_bonus
-            if has_exact_match(
-                str(r.get("student_field_text", "")),
-                str(r.get("teacher_field_text", "")),
-            )
-            else 0.0,
-            axis=1,
-        )
-    else:
-        out["exact_match_bonus"] = 0.0
+    match_words_list: List[str] = []
+    match_bonus_list: List[float] = []
 
-    out["weighted_score"] = out["weighted_score_base"] + out["exact_match_bonus"]
+    if "student_field_text" in out.columns and "teacher_field_text" in out.columns:
+        for _, row in out.iterrows():
+            matched_words = get_match_words(
+                str(row.get("student_field_text", "")),
+                str(row.get("teacher_field_text", "")),
+            )
+            match_words_list.append(", ".join(matched_words) if matched_words else "")
+            match_bonus_list.append(len(matched_words) * per_match_bonus)
+    else:
+        match_words_list = [""] * len(out)
+        match_bonus_list = [0.0] * len(out)
+
+    out["match_word"] = match_words_list
+    out["match_word_bonus"] = match_bonus_list
+
+    # 表示用 total_score は「重み付き総合 + bonus」とする
+    out["total_score"] = out["weighted_score_base"] + pd.to_numeric(
+        out["match_word_bonus"], errors="coerce"
+    ).fillna(0.0)
+
     return out
 
 
@@ -339,7 +357,8 @@ def main() -> None:
             step=0.05,
         )
 
-        st.caption("※ 完全一致する語が1つでもある場合、総合類似度に +0.01 されます。")
+        st.caption("※ 完全一致する語1語につき、総合類似度に +0.005 されます。")
+        st.caption("※ 完全一致判定は field_score に使った単語同士のみで行います。")
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -350,7 +369,7 @@ def main() -> None:
                 scores_df,
                 field_weight=field_weight,
                 content_weight=content_weight,
-                exact_match_bonus=0.01,
+                per_match_bonus=0.005,
             )
 
             student_names = sorted(
@@ -368,31 +387,25 @@ def main() -> None:
                     weighted_scores_df["student_name"].astype(str) == str(selected_student)
                 ].copy()
 
-                display_df = display_df.sort_values("weighted_score", ascending=False).reset_index(drop=True)
+                # 全員表示
+                display_df = display_df.sort_values("total_score", ascending=False).reset_index(drop=True)
                 display_df.insert(0, "順位", range(1, len(display_df) + 1))
 
-                display_cols = [
-                    c
-                    for c in [
-                        "順位",
-                        "student_name",
-                        "title",
-                        "teacher_name",
-                        "weighted_score",
-                        "exact_match_bonus",
-                        "field_score",
-                        "content_score",
-                        "total_score",
-                        "student_field_text",
-                        "teacher_field_text",
-                        "student_content_text",
-                        "teacher_content_text",
-                    ]
-                    if c in display_df.columns
-                ]
+                rename_map = {
+                    "順位": "順位",
+                    "teacher_name": "teacher_name",
+                    "total_score": "total_score",
+                    "field_score": "field_score",
+                    "content_score": "content_score",
+                    "match_word": "match_word",
+                    "match_word_bonus": "match_word_bonus",
+                }
+
+                keep_cols = ["順位", "teacher_name", "total_score", "field_score", "content_score", "match_word", "match_word_bonus"]
+                display_df = display_df[keep_cols].copy()
 
                 st.dataframe(
-                    display_df[display_cols] if display_cols else display_df,
+                    display_df,
                     width="stretch",
                     hide_index=True,
                     height=700,
@@ -445,7 +458,7 @@ def main() -> None:
                 scores_df,
                 field_weight=field_weight,
                 content_weight=content_weight,
-                exact_match_bonus=0.01,
+                per_match_bonus=0.005,
             )
             csv_bytes = weighted_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             col2.download_button(
