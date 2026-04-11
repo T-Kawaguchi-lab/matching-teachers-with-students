@@ -1,0 +1,33 @@
+{
+  "updated_at": "2026-04-10T02:30:14",
+  "teacher_input": {
+    "path": "/mnt/data/project/matching-teachers-with-students/incoming/teachers_latest.xlsx",
+    "modified_at": "2026-04-10T02:28:14",
+    "size_bytes": 11654
+  },
+  "student_input": {
+    "path": "/mnt/data/project/matching-teachers-with-students/incoming/students_latest.xlsx",
+    "modified_at": "2026-04-10T02:28:14",
+    "size_bytes": 14627
+  },
+  "master_title_input": {
+    "path": "/mnt/data/project/matching-teachers-with-students/data_sources/master_title.xlsx",
+    "modified_at": "2026-04-10T02:28:14",
+    "size_bytes": 41454
+  },
+  "students_count": 104,
+  "teachers_count": 74,
+  "scores_count": 1040,
+  "recommendations_count": 104,
+  "groups": {
+    "MPPS": {
+      "students": 83,
+      "teachers": 38
+    },
+    "MSE": {
+      "students": 21,
+      "teachers": 36
+    }
+  },
+  "note": "TRIOS取得は実行環境のネットワーク状況に依存します。失敗時はキャッシュまたは空欄で継続します。"
+}

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+logs/
+data_sources/trios_html_cache/
+.DS_Store
+Thumbs.db
+incoming/input_registry.json
