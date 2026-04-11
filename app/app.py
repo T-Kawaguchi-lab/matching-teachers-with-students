@@ -42,24 +42,14 @@ def load_status() -> dict:
         return {}
 
 
-def safe_read_excel(path: Path, sheet_name=0) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_excel(path, sheet_name=sheet_name)
-    except Exception:
-        return pd.DataFrame()
-
-
 def get_group_df_from_excel(path: Path, group: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
-
     try:
         xls = pd.ExcelFile(path)
         if group in xls.sheet_names:
             return pd.read_excel(path, sheet_name=group)
-        if len(xls.sheet_names) > 0:
+        if xls.sheet_names:
             return pd.read_excel(path, sheet_name=xls.sheet_names[0])
         return pd.DataFrame()
     except Exception:
@@ -69,7 +59,6 @@ def get_group_df_from_excel(path: Path, group: str) -> pd.DataFrame:
 def safe_read_scores_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
-
     try:
         df = pd.read_csv(path)
     except Exception:
@@ -110,14 +99,14 @@ def main() -> None:
 
     st.markdown(
         """
-    <style>
-    .block-container {max-width: 1500px; padding-top: 1.2rem;}
-    .card {border: 1px solid #dde7f3; border-radius: 16px; padding: 16px; background: #fbfdff; margin-bottom: 14px;}
-    .metric {border: 1px solid #dde7f3; border-radius: 16px; padding: 14px; background: white;}
-    .small {color:#64748b; font-size:0.9rem;}
-    .title {font-size:2rem; font-weight:800; margin-bottom:.25rem;}
-    </style>
-    """,
+<style>
+.block-container {max-width: 1500px; padding-top: 1.2rem;}
+.card {border: 1px solid #dde7f3; border-radius: 16px; padding: 16px; background: #fbfdff; margin-bottom: 14px;}
+.metric {border: 1px solid #dde7f3; border-radius: 16px; padding: 14px; background: white;}
+.small {color:#64748b; font-size:0.9rem;}
+.title {font-size:2rem; font-weight:800; margin-bottom:.25rem;}
+</style>
+""",
         unsafe_allow_html=True,
     )
 
