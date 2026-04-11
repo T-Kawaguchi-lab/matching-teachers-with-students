@@ -7,11 +7,6 @@ from sklearn.feature_extraction.text import HashingVectorizer
 
 from .utils import normalize_text
 
-try:
-    from sentence_transformers import SentenceTransformer
-except Exception:  # pragma: no cover
-    SentenceTransformer = None
-
 
 class SimpleEmbeddingModel:
     def __init__(self, n_features: int = 2048):
@@ -35,9 +30,8 @@ class SimpleEmbeddingModel:
 
 
 def load_embedding_model(model_name: str):
-    if SentenceTransformer is None:
-        return SimpleEmbeddingModel()
     try:
+        from sentence_transformers import SentenceTransformer
         return SentenceTransformer(model_name)
     except Exception:
         return SimpleEmbeddingModel()
