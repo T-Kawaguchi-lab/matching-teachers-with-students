@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import List, Set
 
 import pandas as pd
 import streamlit as st
@@ -74,68 +75,6 @@ def safe_read_scores_csv(path: Path) -> pd.DataFrame:
     return df
 
 
-def recompute_weighted_scores(
-    df: pd.DataFrame,
-    field_weight: float,
-    content_weight: float,
-) -> pd.DataFrame:
-    out = df.copy()
-
-    fw = float(field_weight)
-    cw = float(content_weight)
-    weight_sum = fw + cw
-    if weight_sum <= 0:
-        fw, cw = 0.5, 0.5
-    else:
-        fw /= weight_sum
-        cw /= weight_sum
-
-    if "field_score" in out.columns and "content_score" in out.columns:
-        out["weighted_score"] = (
-            fw * pd.to_numeric(out["field_score"], errors="coerce").fillna(0.0)
-            + cw * pd.to_numeric(out["content_score"], errors="coerce").fillna(0.0)
-        )
-    else:
-        out["weighted_score"] = pd.to_numeric(out.get("total_score", 0.0), errors="coerce").fillna(0.0)
-
-    return out
-
-
-def build_recommendation_from_scores(scores_df: pd.DataFrame, top_k: int = 3) -> pd.DataFrame:
-    if scores_df.empty:
-        return pd.DataFrame()
-
-    rows = []
-
-    for (group, student_name), g in scores_df.groupby(["group", "student_name"], dropna=False):
-        g2 = g.sort_values("weighted_score", ascending=False).reset_index(drop=True)
-
-        title = g2["title"].iloc[0] if "title" in g2.columns and not g2.empty else ""
-
-        teacher_names = g2["teacher_name"].astype(str).tolist()
-        weighted_scores = g2["weighted_score"].astype(float).tolist()
-
-        while len(teacher_names) < top_k:
-            teacher_names.append("")
-        while len(weighted_scores) < top_k:
-            weighted_scores.append(0.0)
-
-        row = {
-            "group": group,
-            "student_name": student_name,
-            "title": title,
-            "teacher_1": teacher_names[0],
-            "teacher_2": teacher_names[1],
-            "teacher_3": teacher_names[2],
-            "score_1": weighted_scores[0],
-            "score_2": weighted_scores[1],
-            "score_3": weighted_scores[2],
-        }
-        rows.append(row)
-
-    return pd.DataFrame(rows)
-
-
 def run_git_push(message: str) -> str:
     if not (ROOT_DIR / ".git").exists():
         return "git リポジトリが見つかりません。"
@@ -154,6 +93,152 @@ def run_git_push(message: str) -> str:
             break
 
     return "\n\n".join(out)
+
+
+def normalize_text_for_match(text: str) -> str:
+    if pd.isna(text):
+        return ""
+    return str(text).replace("　", " ").strip()
+
+
+def split_exact_match_tokens(text: str) -> Set[str]:
+    """
+    完全一致判定用の単語集合。
+    句読点・改行・スラッシュなどで緩く分割するが、部分一致はしない。
+    """
+    if not text:
+        return set()
+
+    separators = [",", "，", "、", ";", "；", "\n", "\r", "\t", "|", "/", "／"]
+    s = normalize_text_for_match(text)
+    for sep in separators:
+        s = s.replace(sep, "\n")
+
+    parts = []
+    for line in s.split("\n"):
+        token = line.strip()
+        if token:
+            parts.append(token)
+
+    return set(parts)
+
+
+def has_exact_match(student_field_text: str, teacher_field_text: str) -> bool:
+    s_tokens = split_exact_match_tokens(student_field_text)
+    t_tokens = split_exact_match_tokens(teacher_field_text)
+
+    if not s_tokens or not t_tokens:
+        return False
+
+    return len(s_tokens & t_tokens) >= 1
+
+
+def recompute_weighted_scores(
+    df: pd.DataFrame,
+    field_weight: float,
+    content_weight: float,
+    exact_match_bonus: float = 0.01,
+) -> pd.DataFrame:
+    out = df.copy()
+
+    fw = float(field_weight)
+    cw = float(content_weight)
+    weight_sum = fw + cw
+    if weight_sum <= 0:
+        fw, cw = 0.5, 0.5
+    else:
+        fw /= weight_sum
+        cw /= weight_sum
+
+    field_score = pd.to_numeric(out.get("field_score", 0.0), errors="coerce").fillna(0.0)
+    content_score = pd.to_numeric(out.get("content_score", 0.0), errors="coerce").fillna(0.0)
+
+    out["weighted_score_base"] = fw * field_score + cw * content_score
+
+    if "student_field_text" in out.columns and "teacher_field_text" in out.columns:
+        out["exact_match_bonus"] = out.apply(
+            lambda r: exact_match_bonus
+            if has_exact_match(
+                str(r.get("student_field_text", "")),
+                str(r.get("teacher_field_text", "")),
+            )
+            else 0.0,
+            axis=1,
+        )
+    else:
+        out["exact_match_bonus"] = 0.0
+
+    out["weighted_score"] = out["weighted_score_base"] + out["exact_match_bonus"]
+    return out
+
+
+def build_recommendation_from_scores(scores_df: pd.DataFrame, top_k: int = 3) -> pd.DataFrame:
+    if scores_df.empty:
+        return pd.DataFrame()
+
+    rows = []
+
+    for (group, student_name), g in scores_df.groupby(["group", "student_name"], dropna=False):
+        g2 = g.sort_values("weighted_score", ascending=False).reset_index(drop=True)
+        title = g2["title"].iloc[0] if "title" in g2.columns and not g2.empty else ""
+
+        teacher_names = g2["teacher_name"].astype(str).tolist()
+        weighted_scores = g2["weighted_score"].astype(float).tolist()
+
+        while len(teacher_names) < top_k:
+            teacher_names.append("")
+        while len(weighted_scores) < top_k:
+            weighted_scores.append(0.0)
+
+        rows.append(
+            {
+                "group": group,
+                "student_name": student_name,
+                "title": title,
+                "teacher_1": teacher_names[0],
+                "teacher_2": teacher_names[1],
+                "teacher_3": teacher_names[2],
+                "score_1": weighted_scores[0],
+                "score_2": weighted_scores[1],
+                "score_3": weighted_scores[2],
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def extract_teacher_title_append_df(path: Path) -> pd.DataFrame:
+    """
+    追加ファイルから「指導教員」「担当タイトル」だけを抜き出して master_title へ追記するためのDFを作る。
+    列名揺れをある程度吸収する。
+    """
+    if not path.exists():
+        return pd.DataFrame(columns=["指導教員", "担当タイトル"])
+
+    if path.suffix.lower() == ".csv":
+        src = pd.read_csv(path)
+    else:
+        src = pd.read_excel(path)
+
+    if src.empty:
+        return pd.DataFrame(columns=["指導教員", "担当タイトル"])
+
+    teacher_candidates = ["指導教員", "教員", "担当教員", "teacher_name", "teacher"]
+    title_candidates = ["担当タイトル", "タイトル", "修論タイトル", "title"]
+
+    teacher_col = next((c for c in teacher_candidates if c in src.columns), None)
+    title_col = next((c for c in title_candidates if c in src.columns), None)
+
+    if teacher_col is None or title_col is None:
+        return pd.DataFrame(columns=["指導教員", "担当タイトル"])
+
+    out = src[[teacher_col, title_col]].copy()
+    out.columns = ["指導教員", "担当タイトル"]
+    out["指導教員"] = out["指導教員"].astype(str).str.strip()
+    out["担当タイトル"] = out["担当タイトル"].astype(str).str.strip()
+    out = out[(out["指導教員"] != "") & (out["担当タイトル"] != "")]
+    out = out.drop_duplicates().reset_index(drop=True)
+    return out
 
 
 def main() -> None:
@@ -187,7 +272,10 @@ def main() -> None:
 
         student_upload = st.file_uploader("M1_MPPS_MSE_2024", type=["xlsx"])
         teacher_upload = st.file_uploader("指導教員一覧_2025", type=["xlsx"])
-        master_append = st.file_uploader("master_title に追加する CSV / Excel", type=["csv", "xlsx"])
+        master_append = st.file_uploader(
+            "master_title に追加する CSV / Excel（指導教員・担当タイトル）",
+            type=["csv", "xlsx"],
+        )
 
         if st.button("保存", width="stretch"):
             saved = []
@@ -208,8 +296,14 @@ def main() -> None:
                 try:
                     temp = GENERATED_DIR / f"_append_{master_append.name}"
                     save_upload(master_append, temp)
-                    update_master_title_file(ROOT_DIR, temp)
-                    st.success("master_title.xlsx に追加しました。")
+
+                    append_df = extract_teacher_title_append_df(temp)
+                    if append_df.empty:
+                        st.warning("追加対象の列（指導教員・担当タイトル）を読み取れませんでした。")
+                    else:
+                        append_df.to_excel(temp, index=False)
+                        update_master_title_file(ROOT_DIR, temp)
+                        st.success(f"master_title.xlsx に {len(append_df)} 件追加しました。")
                 except Exception as exc:
                     st.error(f"master_title の更新に失敗しました: {exc}")
                     st.exception(exc)
@@ -223,7 +317,11 @@ def main() -> None:
                 if master_append is not None:
                     temp = GENERATED_DIR / f"_append_{master_append.name}"
                     save_upload(master_append, temp)
-                    update_master_title_file(ROOT_DIR, temp)
+
+                    append_df = extract_teacher_title_append_df(temp)
+                    if not append_df.empty:
+                        append_df.to_excel(temp, index=False)
+                        update_master_title_file(ROOT_DIR, temp)
 
                 result = run_pipeline(ROOT_DIR)
                 st.success("完了")
@@ -265,31 +363,43 @@ def main() -> None:
         scores_df = safe_read_scores_csv(SCORES_CSV)
         scores_df = scores_df[scores_df["group"].astype(str) == str(selected_group)].copy() if not scores_df.empty else pd.DataFrame()
 
-        left, right = st.columns([1.05, 1.15])
+        # 重み
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("重み設定")
+
+        colw1, colw2 = st.columns(2)
+        field_weight = colw1.slider(
+            "field_score の重み",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            step=0.05,
+        )
+        content_weight = colw2.slider(
+            "content_score の重み",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            step=0.05,
+        )
+
+        st.caption("※ 完全一致する語が1つでもある場合、総合類似度に +0.01 されます。")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        left, right = st.columns([1.0, 1.2])
 
         with left:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.subheader("推薦結果")
 
             if not scores_df.empty:
-                weight_col1, weight_col2 = st.columns(2)
-                field_weight = weight_col1.slider(
-                    "分野重み / field",
-                    min_value=0.0,
-                    max_value=1.0,
-                    value=0.5,
-                    step=0.05,
+                weighted_scores_df = recompute_weighted_scores(
+                    scores_df,
+                    field_weight=field_weight,
+                    content_weight=content_weight,
+                    exact_match_bonus=0.01,
                 )
-                content_weight = weight_col2.slider(
-                    "内容重み / content",
-                    min_value=0.0,
-                    max_value=1.0,
-                    value=0.5,
-                    step=0.05,
-                )
-
-                scores_weighted = recompute_weighted_scores(scores_df, field_weight, content_weight)
-                rec_df = build_recommendation_from_scores(scores_weighted, top_k=3)
+                rec_df = build_recommendation_from_scores(weighted_scores_df, top_k=3)
 
                 if not rec_df.empty:
                     st.dataframe(rec_df, width="stretch", hide_index=True)
@@ -306,98 +416,61 @@ def main() -> None:
 
         with right:
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.subheader("詳細類似度")
+            st.subheader("詳細類似度（表示する人を選択）")
 
             if not scores_df.empty:
-                weight_col1, weight_col2 = st.columns(2)
-                field_weight_detail = weight_col1.slider(
-                    "分野重み / field ",
-                    min_value=0.0,
-                    max_value=1.0,
-                    value=0.5,
-                    step=0.05,
-                    key="field_weight_detail",
-                )
-                content_weight_detail = weight_col2.slider(
-                    "内容重み / content ",
-                    min_value=0.0,
-                    max_value=1.0,
-                    value=0.5,
-                    step=0.05,
-                    key="content_weight_detail",
-                )
-
-                scores_df = recompute_weighted_scores(
+                weighted_scores_df = recompute_weighted_scores(
                     scores_df,
-                    field_weight_detail,
-                    content_weight_detail,
+                    field_weight=field_weight,
+                    content_weight=content_weight,
+                    exact_match_bonus=0.01,
                 )
 
-                student_names = ["すべて"] + sorted(scores_df["student_name"].dropna().astype(str).unique().tolist())
-                selected_student = st.selectbox(
-                    "学生で絞り込み",
-                    options=student_names,
-                    key=f"student_filter_{selected_group}",
+                student_names = sorted(
+                    weighted_scores_df["student_name"].dropna().astype(str).unique().tolist()
                 )
 
-                show_all_candidates = st.checkbox(
-                    "候補者全員を表示する",
-                    value=True,
-                    key=f"show_all_candidates_{selected_group}",
-                )
-                top_n = st.number_input(
-                    "上位何件を表示するか（全件表示OFF時）",
-                    min_value=1,
-                    max_value=200,
-                    value=20,
-                    step=1,
-                    key=f"top_n_{selected_group}",
-                )
+                if student_names:
+                    selected_student = st.selectbox(
+                        "表示する学生を選択",
+                        options=student_names,
+                        key=f"student_filter_{selected_group}",
+                    )
 
-                display_df = scores_df.copy()
-
-                if selected_student != "すべて":
-                    display_df = display_df[
-                        display_df["student_name"].astype(str) == str(selected_student)
+                    display_df = weighted_scores_df[
+                        weighted_scores_df["student_name"].astype(str) == str(selected_student)
                     ].copy()
 
-                sort_cols = ["student_name", "weighted_score"] if "student_name" in display_df.columns else ["weighted_score"]
-                ascending = [True, False] if "student_name" in display_df.columns else [False]
-                display_df = display_df.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
-
-                if selected_student != "すべて":
                     display_df = display_df.sort_values("weighted_score", ascending=False).reset_index(drop=True)
                     display_df.insert(0, "順位", range(1, len(display_df) + 1))
-                    if not show_all_candidates:
-                        display_df = display_df.head(int(top_n)).copy()
 
-                display_cols = [
-                    c for c in [
-                        "順位",
-                        "student_name",
-                        "title",
-                        "teacher_name",
-                        "weighted_score",
-                        "field_score",
-                        "content_score",
-                        "total_score",
-                        "student_field_text",
-                        "teacher_field_text",
-                        "student_content_text",
-                        "teacher_content_text",
+                    display_cols = [
+                        c
+                        for c in [
+                            "順位",
+                            "student_name",
+                            "title",
+                            "teacher_name",
+                            "weighted_score",
+                            "exact_match_bonus",
+                            "field_score",
+                            "content_score",
+                            "total_score",
+                            "student_field_text",
+                            "teacher_field_text",
+                            "student_content_text",
+                            "teacher_content_text",
+                        ]
+                        if c in display_df.columns
                     ]
-                    if c in display_df.columns
-                ]
 
-                st.caption(
-                    "※ 現在のCSVでは field_score と content_score の2軸を使って重み付き再計算しています。"
-                )
-
-                st.dataframe(
-                    display_df[display_cols] if display_cols else display_df,
-                    width="stretch",
-                    hide_index=True,
-                )
+                    st.dataframe(
+                        display_df[display_cols] if display_cols else display_df,
+                        width="stretch",
+                        hide_index=True,
+                    )
+                else:
+                    st.info("表示できる学生がいません。")
             else:
                 st.info("まだ詳細類似度がありません。")
 
@@ -445,7 +518,6 @@ def main() -> None:
 
         if SCORES_CSV.exists():
             col4, col5 = st.columns(2)
-
             col4.download_button(
                 "student_teacher_scores_long.csv",
                 SCORES_CSV.read_bytes(),
@@ -455,8 +527,13 @@ def main() -> None:
             )
 
             if not scores_df.empty:
-                export_df = scores_df.copy()
-                csv_bytes = export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                weighted_export_df = recompute_weighted_scores(
+                    scores_df,
+                    field_weight=field_weight,
+                    content_weight=content_weight,
+                    exact_match_bonus=0.01,
+                )
+                csv_bytes = weighted_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
                 col5.download_button(
                     "重み反映後CSVをダウンロード",
                     csv_bytes,
