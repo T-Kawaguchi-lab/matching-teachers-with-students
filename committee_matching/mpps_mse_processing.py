@@ -222,45 +222,46 @@ def prepare_teachers(
         groups = parse_groups(row.get("group_text"))
         if not groups:
             continue
-        trios = trios_lookup.get(normalize_name(teacher_name), {})
-        trios_topics = unique_keep_order(trios.get("research_topics", []) or [])
-        trios_research_fields = unique_keep_order(trios.get("research_fields", []) or [])
-        trios_research_keywords = unique_keep_order(trios.get("research_keywords", []) or [])
-        trios_papers = unique_keep_order(trios.get("papers", []) or [])
-        trios_info_values = unique_keep_order([
-            *trios_topics,
-            *trios_research_fields,
-            *trios_research_keywords,
-            *trios_papers,
+        profile = trios_lookup.get(normalize_name(teacher_name), {})
+        profile_topics = unique_keep_order(profile.get("research_topics", []) or [])
+        profile_research_fields = unique_keep_order(profile.get("research_fields", []) or [])
+        profile_research_keywords = unique_keep_order(profile.get("research_keywords", []) or [])
+        profile_papers = unique_keep_order(profile.get("papers", []) or [])
+        profile_info_values = unique_keep_order([
+            *profile_topics,
+            *profile_research_fields,
+            *profile_research_keywords,
+            *profile_papers,
         ])
         titles = unique_keep_order(history_by_teacher.get(normalize_name(teacher_name), []))
 
-        field_source_texts = [*trios_topics, *trios_research_fields]
+        field_source_texts = [*profile_topics, *profile_research_fields]
         coarse_fields, detailed_fields = infer_research_fields_from_texts(field_source_texts, include_coarse=True)
         taxonomy_fields = _suggest_taxonomy_fields(field_matcher, field_source_texts, top_k=4)
 
-        coarse_fields = unique_keep_order(trios_research_fields + coarse_fields)
+        coarse_fields = unique_keep_order(profile_research_fields + coarse_fields)
         detailed_fields = unique_keep_order(detailed_fields + taxonomy_fields)
         if not detailed_fields:
-            detailed_fields = unique_keep_order(trios_research_fields + trios_research_keywords)
+            detailed_fields = unique_keep_order(profile_research_fields + profile_research_keywords)
 
         field_text_values = unique_keep_order(
-            trios_research_fields + trios_research_keywords + coarse_fields + detailed_fields
+            profile_research_fields + profile_research_keywords + coarse_fields + detailed_fields
         )
-        content_text_values = unique_keep_order(titles + trios_topics + trios_papers)
+        content_text_values = unique_keep_order(titles + profile_topics + profile_papers)
 
         for group in groups:
             rows.append({
                 "teacher_name": teacher_name,
                 "group": group,
                 "group_text": normalize_text(row.get("group_text")),
-                "trios_url": normalize_text(trios.get("matched_url", "")),
-                "trios_status": normalize_text(trios.get("status", "")),
-                "trios_info": "\n".join(trios_info_values),
-                "trios_topics_text": " / ".join(trios_topics),
-                "trios_research_fields_text": " / ".join(trios_research_fields),
-                "trios_research_keywords_text": " / ".join(trios_research_keywords),
-                "trios_papers_text": " / ".join(trios_papers),
+                "trios_url": normalize_text(profile.get("matched_url", "")),
+                "trios_status": normalize_text(profile.get("status", "")),
+                "profile_source": normalize_text(profile.get("profile_source", "trios")),
+                "trios_info": "\n".join(profile_info_values),
+                "trios_topics_text": " / ".join(profile_topics),
+                "trios_research_fields_text": " / ".join(profile_research_fields),
+                "trios_research_keywords_text": " / ".join(profile_research_keywords),
+                "trios_papers_text": " / ".join(profile_papers),
                 "master_title_text": " / ".join(titles),
                 "coarse_research_field": " ; ".join(coarse_fields),
                 "detailed_research_field": " ; ".join(detailed_fields),

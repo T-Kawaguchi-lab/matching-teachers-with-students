@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Set
 
 import pandas as pd
 import streamlit as st
@@ -167,7 +167,6 @@ def recompute_weighted_scores(
     field_score = pd.to_numeric(out.get("field_score", 0.0), errors="coerce").fillna(0.0)
     content_score = pd.to_numeric(out.get("content_score", 0.0), errors="coerce").fillna(0.0)
 
-    # 再計算前の重み付きベース
     out["weighted_score_base"] = fw * field_score + cw * content_score
 
     match_words_list: List[str] = []
@@ -187,8 +186,6 @@ def recompute_weighted_scores(
 
     out["match_word"] = match_words_list
     out["match_word_bonus"] = match_bonus_list
-
-    # 表示用 total_score は「重み付き総合 + bonus」とする
     out["total_score"] = out["weighted_score_base"] + pd.to_numeric(
         out["match_word_bonus"], errors="coerce"
     ).fillna(0.0)
@@ -224,6 +221,64 @@ def extract_teacher_title_append_df(path: Path) -> pd.DataFrame:
     out = out[(out["指導教員"] != "") & (out["担当タイトル"] != "")]
     out = out.drop_duplicates().reset_index(drop=True)
     return out
+
+
+def build_student_to_teacher_table(df: pd.DataFrame, selected_student: str) -> pd.DataFrame:
+    display_df = df[df["student_name"].astype(str) == str(selected_student)].copy()
+    display_df = display_df.sort_values("total_score", ascending=False).reset_index(drop=True)
+    display_df.insert(0, "順位", range(1, len(display_df) + 1))
+
+    keep_cols = [
+        "順位",
+        "teacher_name",
+        "total_score",
+        "field_score",
+        "content_score",
+        "match_word",
+        "match_word_bonus",
+    ]
+    display_df = display_df[keep_cols].copy()
+    display_df = display_df.rename(
+        columns={
+            "teacher_name": "教員名",
+            "total_score": "total_score",
+            "field_score": "field_score",
+            "content_score": "content_score",
+            "match_word": "match_word",
+            "match_word_bonus": "match_word_bonus",
+        }
+    )
+    return display_df
+
+
+def build_teacher_to_student_table(df: pd.DataFrame, selected_teacher: str) -> pd.DataFrame:
+    display_df = df[df["teacher_name"].astype(str) == str(selected_teacher)].copy()
+    display_df = display_df.sort_values("total_score", ascending=False).reset_index(drop=True)
+    display_df.insert(0, "順位", range(1, len(display_df) + 1))
+
+    keep_cols = [
+        "順位",
+        "student_name",
+        "title",
+        "total_score",
+        "field_score",
+        "content_score",
+        "match_word",
+        "match_word_bonus",
+    ]
+    display_df = display_df[keep_cols].copy()
+    display_df = display_df.rename(
+        columns={
+            "student_name": "学生名",
+            "title": "学生タイトル",
+            "total_score": "total_score",
+            "field_score": "field_score",
+            "content_score": "content_score",
+            "match_word": "match_word",
+            "match_word_bonus": "match_word_bonus",
+        }
+    )
+    return display_df
 
 
 def main() -> None:
@@ -346,7 +401,11 @@ def main() -> None:
         )
 
         scores_df = safe_read_scores_csv(SCORES_CSV)
-        scores_df = scores_df[scores_df["group"].astype(str) == str(selected_group)].copy() if not scores_df.empty else pd.DataFrame()
+        scores_df = (
+            scores_df[scores_df["group"].astype(str) == str(selected_group)].copy()
+            if not scores_df.empty
+            else pd.DataFrame()
+        )
 
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("重み設定")
@@ -382,46 +441,58 @@ def main() -> None:
                 per_match_bonus=0.005,
             )
 
-            student_names = sorted(
-                weighted_scores_df["student_name"].dropna().astype(str).unique().tolist()
+            display_mode = st.segmented_control(
+                "表示方法",
+                options=["学生を選んで教員順位を見る", "教員を選んで学生順位を見る"],
+                default="学生を選んで教員順位を見る",
+                key=f"display_mode_{selected_group}",
             )
 
-            if student_names:
-                selected_student = st.selectbox(
-                    "表示する学生を選択",
-                    options=student_names,
-                    key=f"student_filter_{selected_group}",
+            if display_mode == "学生を選んで教員順位を見る":
+                student_names = sorted(
+                    weighted_scores_df["student_name"].dropna().astype(str).unique().tolist()
                 )
 
-                display_df = weighted_scores_df[
-                    weighted_scores_df["student_name"].astype(str) == str(selected_student)
-                ].copy()
+                if student_names:
+                    selected_student = st.selectbox(
+                        "表示する学生を選択",
+                        options=student_names,
+                        key=f"student_filter_{selected_group}",
+                    )
 
-                # 全員表示
-                display_df = display_df.sort_values("total_score", ascending=False).reset_index(drop=True)
-                display_df.insert(0, "順位", range(1, len(display_df) + 1))
+                    display_df = build_student_to_teacher_table(weighted_scores_df, selected_student)
 
-                rename_map = {
-                    "順位": "順位",
-                    "teacher_name": "teacher_name",
-                    "total_score": "total_score",
-                    "field_score": "field_score",
-                    "content_score": "content_score",
-                    "match_word": "match_word",
-                    "match_word_bonus": "match_word_bonus",
-                }
+                    st.dataframe(
+                        display_df,
+                        width="stretch",
+                        hide_index=True,
+                        height=700,
+                    )
+                else:
+                    st.info("表示できる学生がいません。")
 
-                keep_cols = ["順位", "teacher_name", "total_score", "field_score", "content_score", "match_word", "match_word_bonus"]
-                display_df = display_df[keep_cols].copy()
-
-                st.dataframe(
-                    display_df,
-                    width="stretch",
-                    hide_index=True,
-                    height=700,
-                )
             else:
-                st.info("表示できる学生がいません。")
+                teacher_names = sorted(
+                    weighted_scores_df["teacher_name"].dropna().astype(str).unique().tolist()
+                )
+
+                if teacher_names:
+                    selected_teacher = st.selectbox(
+                        "表示する教員を選択",
+                        options=teacher_names,
+                        key=f"teacher_filter_{selected_group}",
+                    )
+
+                    display_df = build_teacher_to_student_table(weighted_scores_df, selected_teacher)
+
+                    st.dataframe(
+                        display_df,
+                        width="stretch",
+                        hide_index=True,
+                        height=700,
+                    )
+                else:
+                    st.info("表示できる教員がいません。")
         else:
             st.info("まだ類似度計算結果がありません。")
 
