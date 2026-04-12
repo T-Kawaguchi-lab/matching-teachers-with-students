@@ -21,6 +21,32 @@ DEFAULT_RESEARCHMAP_BASE_URL = 'https://researchmap.jp'
 DEFAULT_RESEARCHMAP_API_URL = 'https://api.researchmap.jp'
 REQUEST_TIMEOUT = 20
 
+RESEARCHMAP_RESERVED_SEGMENTS = {
+    '',
+    'researchers',
+    'public',
+    'login',
+    'logout',
+    'settings',
+    'about',
+    'faq',
+    'manual',
+    'help',
+    'communities',
+    'search',
+    'advanced_search',
+    'new',
+    'ja',
+    'en',
+}
+
+RESEARCHMAP_SUBPAGE_SUFFIXES = {
+    'research_projects': 'research_topics',
+    'published_papers': 'papers',
+    'research_areas': 'research_fields',
+    'research_interests': 'research_keywords',
+}
+
 
 def _iter_dt_dd_pairs(soup: BeautifulSoup) -> Iterable[Tuple[str, object]]:
     for dt in soup.find_all('dt'):
@@ -56,6 +82,8 @@ def _clean_item(text: object) -> str:
     if not cleaned:
         return ''
     if 'さらに表示' in cleaned or lowered == 'more...' or lowered.endswith(' more...'):
+        return ''
+    if cleaned in {'マイポータルへ', 'My portal', 'researchmap'}:
         return ''
     return cleaned
 
@@ -95,16 +123,127 @@ def _extract_lines_from_dd(dd) -> List[str]:
     return unique_keep_order(items)
 
 
+def _iter_heading_blocks(soup: BeautifulSoup, patterns: Iterable[str]) -> Iterable[object]:
+    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
+    for node in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'div', 'span', 'p', 'th', 'a']):
+        text = normalize_text(node.get_text(' ', strip=True))
+        if not text:
+            continue
+        if any(p.search(text) for p in compiled):
+            yield node
+
+
+def _looks_like_section_heading(text: str) -> bool:
+    value = normalize_text(text)
+    if not value:
+        return False
+    heading_patterns = [
+        r'^基本情報$', r'^所属$', r'^経歴$', r'^学歴$', r'^受賞$', r'^委員歴$',
+        r'^論文$', r'^MISC$', r'^書籍等出版物$', r'^講演・口頭発表等$',
+        r'^担当経験のある科目', r'^所属学協会$', r'^社会貢献活動$',
+        r'^研究分野$', r'^研究キーワード$', r'.*研究課題$',
+        r'^Research fields?$', r'^Research keywords?$', r'^Research projects?$',
+    ]
+    return any(re.search(p, value, re.IGNORECASE) for p in heading_patterns)
+
+
+def _extract_lines_from_container(node) -> List[str]:
+    if node is None:
+        return []
+
+    rows = node.select('table tbody tr') or node.select('table tr')
+    if rows:
+        items: List[str] = []
+        for tr in rows:
+            tds = tr.find_all('td', recursive=False)
+            if not tds:
+                continue
+            title = _clean_item(tds[0].get_text(' ', strip=True))
+            if title:
+                items.append(title)
+        return unique_keep_order(items)
+
+    list_items = node.select('ul > li') or node.select('ol > li')
+    if list_items:
+        items = []
+        for li in list_items:
+            bold = li.find(['b', 'strong', 'a'])
+            if bold:
+                title = _clean_item(bold.get_text(' ', strip=True))
+            else:
+                strings = [_clean_item(s) for s in li.stripped_strings]
+                strings = [s for s in strings if s]
+                title = strings[0] if strings else ''
+            if title:
+                items.append(title)
+        return unique_keep_order(items)
+
+    items = []
+    for s in node.stripped_strings:
+        item = _clean_item(s)
+        if not item:
+            continue
+        if _looks_like_section_heading(item):
+            continue
+        items.append(item)
+    return unique_keep_order(items)
+
+
+def _extract_by_heading_patterns(html: str, patterns: Iterable[str]) -> List[str]:
+    soup = BeautifulSoup(html, 'lxml')
+
+    dd = _find_first_dd(soup, patterns)
+    if dd is not None:
+        dd_items = _extract_lines_from_dd(dd)
+        if dd_items:
+            return unique_keep_order(dd_items)
+
+    values: List[str] = []
+    for heading in _iter_heading_blocks(soup, patterns):
+        siblings = []
+        for sibling in heading.next_siblings:
+            if getattr(sibling, 'get_text', None) is None:
+                continue
+            text = normalize_text(sibling.get_text(' ', strip=True))
+            if text and _looks_like_section_heading(text):
+                break
+            siblings.append(sibling)
+            if len(siblings) >= 6:
+                break
+        for sibling in siblings:
+            values.extend(_extract_lines_from_container(sibling))
+        if values:
+            break
+
+    if values:
+        return unique_keep_order(values)
+
+    body_lines = []
+    started = False
+    for line in soup.get_text('\n', strip=True).splitlines():
+        line = _clean_item(line)
+        if not line:
+            continue
+        if not started and any(re.search(p, line, re.IGNORECASE) for p in patterns):
+            started = True
+            continue
+        if started:
+            if _looks_like_section_heading(line):
+                break
+            body_lines.append(line)
+    return unique_keep_order(body_lines)
+
+
 def extract_topics_and_papers_from_html(html: str) -> Dict[str, List[str]]:
     soup = BeautifulSoup(html, 'lxml')
 
-    topics_dd = _find_first_dd(soup, [r'^研究課題$', r'^Research projects?$'])
+    topics_dd = _find_first_dd(soup, [r'研究課題', r'^Research projects?$'])
     research_fields_dd = _find_first_dd(soup, [r'^研究分野$', r'^Research fields?$'])
-    research_keywords_dd = _find_first_dd(soup, [r'^研究キーワード$', r'^Research keywords?$'])
+    research_keywords_dd = _find_first_dd(soup, [r'^研究キーワード$', r'^Research keywords?$', r'^Research interests?$'])
 
-    topics = _extract_lines_from_dd(topics_dd) if topics_dd else []
-    research_fields = _extract_lines_from_dd(research_fields_dd) if research_fields_dd else []
-    research_keywords = _extract_lines_from_dd(research_keywords_dd) if research_keywords_dd else []
+    topics = _extract_lines_from_dd(topics_dd) if topics_dd else _extract_by_heading_patterns(html, [r'研究課題', r'^Research projects?$'])
+    research_fields = _extract_lines_from_dd(research_fields_dd) if research_fields_dd else _extract_by_heading_patterns(html, [r'^研究分野$', r'^Research fields?$'])
+    research_keywords = _extract_lines_from_dd(research_keywords_dd) if research_keywords_dd else _extract_by_heading_patterns(html, [r'^研究キーワード$', r'^Research keywords?$', r'^Research interests?$'])
 
     paper_sections = _find_all_dds(
         soup,
@@ -117,6 +256,8 @@ def extract_topics_and_papers_from_html(html: str) -> Dict[str, List[str]]:
     papers: List[str] = []
     for dd in paper_sections:
         papers.extend(_extract_lines_from_dd(dd))
+    if not papers:
+        papers = _extract_by_heading_patterns(html, [r'論文', r'paper', r'articles?'])
 
     return {
         'research_topics': unique_keep_order(topics),
@@ -186,13 +327,229 @@ def search_candidates(base_url: str, name: str, per: int = 50) -> List[Dict[str,
     return dedup
 
 
-def choose_best(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
-    target = re.sub(r'\s+', '', normalize_text(name))
+def _normalize_compact_name(value: object) -> str:
+    text = normalize_text(value).lower()
+    text = re.sub(r'\([^)]*\)', '', text)
+    text = re.sub(r'（[^）]*）', '', text)
+    text = re.sub(r'[-‐‑‒–—―ー・･.,，、\s]+', '', text)
+    return text
+
+
+def _clean_display_name(value: object) -> str:
+    text = normalize_text(value)
+    text = re.sub(r'\s*[-|｜].*researchmap.*$', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*[-|｜].*マイポータル.*$', '', text)
+    text = re.sub(r'\s*[-|｜].*My portal.*$', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*researchmap\s*$', '', text, flags=re.IGNORECASE)
+    return normalize_text(text)
+
+
+def _extract_researchmap_permalink(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc and 'researchmap.jp' not in parsed.netloc:
+        return ''
+    path = parsed.path.strip('/')
+    if not path:
+        return ''
+    first = path.split('/')[0].strip()
+    if not first:
+        return ''
+    if first.startswith('@'):
+        first = first[1:]
+    if first.lower() in RESEARCHMAP_RESERVED_SEGMENTS:
+        return ''
+    if not re.fullmatch(r'[0-9A-Za-z._-]+', first):
+        return ''
+    return first
+
+
+def _parse_researchmap_candidates_from_html(html: str, base_url: str) -> List[Dict[str, str]]:
+    soup = BeautifulSoup(html, 'lxml')
+    candidates: List[Dict[str, str]] = []
+
+    for link in soup.select('a[href]'):
+        href = normalize_text(link.get('href'))
+        label = _clean_display_name(link.get_text(' ', strip=True))
+        if not href:
+            continue
+        url = urllib.parse.urljoin(base_url, href)
+        permalink = _extract_researchmap_permalink(url)
+        if not permalink:
+            continue
+        if label in {'一致した業績を検索', 'researchmap', 'Researcher Search', '研究者をさがす', '研究者検索'}:
+            continue
+        profile_url = f'{DEFAULT_RESEARCHMAP_BASE_URL}/{permalink}'
+        candidates.append({
+            'display_name': label or permalink,
+            'url': profile_url,
+            'permalink': permalink,
+        })
+
+    dedup: List[Dict[str, str]] = []
+    seen = set()
     for row in candidates:
-        label = re.sub(r'\s+', '', normalize_text(row.get('display_name')))
-        if label == target or label.startswith(target):
-            return row
-    return candidates[0] if candidates else None
+        key = row['url']
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(row)
+    return dedup
+
+
+def _build_researchmap_query_variants(name: str) -> List[str]:
+    text = normalize_text(name)
+    compact = _normalize_compact_name(name)
+    variants = [text]
+    if text.replace(' ', '') != text:
+        variants.append(text.replace(' ', ''))
+    if ' ' in text:
+        variants.append(text.replace(' ', '　'))
+    if compact and compact != text:
+        variants.append(compact)
+    return unique_keep_order(variants)
+
+
+def unique_keep_order_candidates(values: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for row in values:
+        url = normalize_text(row.get('url', ''))
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        payload = dict(row)
+        payload['display_name'] = _clean_display_name(payload.get('display_name', ''))
+        payload['url'] = url
+        payload['permalink'] = normalize_text(payload.get('permalink', '')) or _extract_researchmap_permalink(url)
+        out.append(payload)
+    return out
+
+
+def _search_researchmap_via_internal_pages(base_url: str, name: str) -> Tuple[List[Dict[str, str]], str]:
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+
+    search_urls = [
+        f'{base_url.rstrip("/")}/researchers',
+        f'{base_url.rstrip("/")}/researchers/',
+    ]
+    param_sets: List[Dict[str, str]] = []
+    for query in _build_researchmap_query_variants(name):
+        param_sets.extend([
+            {'q': query},
+            {'q': query, 'lang': 'ja'},
+            {'name': query, 'op': 'search'},
+            {'name': query, 'op': 'search', 'lang': 'ja'},
+            {'query': query, 'op': 'search', 'lang': 'ja'},
+            {'search': query, 'lang': 'ja'},
+            {'researcher_name': query, 'lang': 'ja'},
+        ])
+
+    last_html = ''
+    all_candidates: List[Dict[str, str]] = []
+    seen_params = set()
+    for search_url in search_urls:
+        for params in param_sets:
+            key = (search_url, tuple(sorted(params.items())))
+            if key in seen_params:
+                continue
+            seen_params.add(key)
+            try:
+                html = fetch(search_url, params=params, session=session)
+            except Exception:
+                continue
+            last_html = html
+            parsed = _parse_researchmap_candidates_from_html(html, base_url)
+            if parsed:
+                all_candidates.extend(parsed)
+                if len(parsed) >= 3:
+                    break
+        if all_candidates:
+            break
+
+    return unique_keep_order_candidates(all_candidates), last_html
+
+
+def _parse_candidates_from_search_engine_html(html: str) -> List[Dict[str, str]]:
+    soup = BeautifulSoup(html, 'lxml')
+    candidates: List[Dict[str, str]] = []
+    for link in soup.select('a[href]'):
+        href = normalize_text(link.get('href'))
+        label = _clean_display_name(link.get_text(' ', strip=True))
+        if not href:
+            continue
+        if href.startswith('/l/?kh=1&uddg='):
+            href = urllib.parse.unquote(href.split('uddg=', 1)[1])
+        permalink = _extract_researchmap_permalink(href)
+        if not permalink:
+            continue
+        profile_url = f'{DEFAULT_RESEARCHMAP_BASE_URL}/{permalink}'
+        candidates.append({
+            'display_name': label or permalink,
+            'url': profile_url,
+            'permalink': permalink,
+        })
+    return unique_keep_order_candidates(candidates)
+
+
+def _search_researchmap_via_duckduckgo(name: str) -> List[Dict[str, str]]:
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+    queries = [
+        f'site:researchmap.jp "{normalize_text(name)}" researchmap',
+        f'site:researchmap.jp {normalize_text(name)} researchmap',
+    ]
+    all_candidates: List[Dict[str, str]] = []
+    for query in queries:
+        try:
+            html = fetch('https://duckduckgo.com/html/', params={'q': query}, session=session)
+        except Exception:
+            continue
+        parsed = _parse_candidates_from_search_engine_html(html)
+        if parsed:
+            all_candidates.extend(parsed)
+            break
+    return unique_keep_order_candidates(all_candidates)
+
+
+def search_researchmap_candidates(base_url: str, name: str) -> Tuple[List[Dict[str, str]], str]:
+    internal_candidates, last_html = _search_researchmap_via_internal_pages(base_url, name)
+    if internal_candidates:
+        return internal_candidates, last_html
+
+    ddg_candidates = _search_researchmap_via_duckduckgo(name)
+    if ddg_candidates:
+        return ddg_candidates, last_html
+
+    return [], last_html
+
+
+def choose_best(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    target = _normalize_compact_name(name)
+    best_row: Optional[Dict[str, str]] = None
+    best_score = -1
+
+    for row in candidates:
+        label = _normalize_compact_name(row.get('display_name'))
+        permalink = _normalize_compact_name(row.get('permalink'))
+        score = 0
+        if label:
+            if label == target:
+                score = 100
+            elif label.startswith(target) or target.startswith(label):
+                score = 90
+            elif target and target in label:
+                score = 80
+        if permalink:
+            if permalink == target:
+                score = max(score, 75)
+            elif target and target in permalink:
+                score = max(score, 65)
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    return best_row or (candidates[0] if candidates else None)
 
 
 def _empty_result(status: str, matched_url: str = '', error: str = '', source: str = '') -> Dict[str, object]:
@@ -239,173 +596,6 @@ def _localized_text(value: object) -> str:
     return normalize_text(value)
 
 
-def _extract_researchmap_permalink(url: str) -> str:
-    parsed = urllib.parse.urlparse(url)
-    if parsed.netloc and 'researchmap.jp' not in parsed.netloc:
-        return ''
-    path = parsed.path.strip('/')
-    if not path:
-        return ''
-    first = path.split('/')[0].strip()
-    if not first:
-        return ''
-    if first in {'researchers', 'public', 'login', 'logout', 'communities', 'support', 'about', 'faq', 'en', 'ja'}:
-        return ''
-    if first.startswith('@'):
-        first = first[1:]
-    if not re.match(r'^[A-Za-z0-9._\-]+$', first):
-        return ''
-    return first
-
-
-def _parse_researchmap_candidates_from_html(html: str, base_url: str) -> List[Dict[str, str]]:
-    soup = BeautifulSoup(html, 'lxml')
-    candidates: List[Dict[str, str]] = []
-
-    for link in soup.select('a[href]'):
-        href = normalize_text(link.get('href'))
-        label = normalize_text(link.get_text(' ', strip=True))
-        if not href or not label:
-            continue
-        url = urllib.parse.urljoin(base_url, href)
-        permalink = _extract_researchmap_permalink(url)
-        if not permalink:
-            continue
-        if label in {'一致した業績を検索', 'researchmap', 'Researcher Search', '研究者をさがす'}:
-            continue
-        candidates.append({
-            'display_name': label,
-            'url': url,
-            'permalink': permalink,
-        })
-
-    dedup: List[Dict[str, str]] = []
-    seen = set()
-    for row in candidates:
-        key = row['url']
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup.append(row)
-    return dedup
-
-
-def _build_researchmap_search_param_candidates(session: requests.Session, base_url: str, name: str) -> List[Dict[str, str]]:
-    candidates: List[Dict[str, str]] = []
-    search_url = f'{base_url.rstrip("/")}/researchers/'
-    try:
-        landing_html = fetch(search_url, session=session, params={'lang': 'ja'})
-        soup = BeautifulSoup(landing_html, 'lxml')
-        for form in soup.find_all('form'):
-            action = normalize_text(form.get('action'))
-            if action and 'researchers' not in action:
-                continue
-            hidden_params: Dict[str, str] = {}
-            for inp in form.select('input[name]'):
-                name_attr = normalize_text(inp.get('name'))
-                if not name_attr:
-                    continue
-                input_type = normalize_text(inp.get('type')).lower()
-                if input_type == 'hidden':
-                    hidden_params[name_attr] = normalize_text(inp.get('value'))
-            for field_name in ['name', 'q', 'query', 'search', 'researcher_name', 'full_name']:
-                params = dict(hidden_params)
-                params[field_name] = name
-                params.setdefault('op', 'search')
-                params.setdefault('lang', 'ja')
-                candidates.append(params)
-    except Exception:
-        pass
-
-    candidates.extend(
-        [
-            {'name': name, 'op': 'search', 'lang': 'ja'},
-            {'q': name, 'op': 'search', 'lang': 'ja'},
-            {'query': name, 'op': 'search', 'lang': 'ja'},
-            {'search': name, 'op': 'search', 'lang': 'ja'},
-            {'name': name, 'lang': 'ja'},
-            {'q': name, 'lang': 'ja'},
-        ]
-    )
-
-    dedup: List[Dict[str, str]] = []
-    seen = set()
-    for params in candidates:
-        key = tuple(sorted(params.items()))
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup.append(params)
-    return dedup
-
-
-def search_researchmap_candidates(base_url: str, name: str) -> Tuple[List[Dict[str, str]], str]:
-    session = requests.Session()
-    session.headers.update(DEFAULT_HEADERS)
-    search_url = f'{base_url.rstrip("/")}/researchers/'
-
-    param_candidates = _build_researchmap_search_param_candidates(session, base_url, name)
-    all_candidates: List[Dict[str, str]] = []
-    last_html = ''
-
-    for params in param_candidates:
-        try:
-            html = fetch(search_url, params=params, session=session)
-            last_html = html
-            parsed = _parse_researchmap_candidates_from_html(html, base_url)
-            if parsed:
-                all_candidates.extend(parsed)
-                if len(parsed) >= 3:
-                    break
-        except Exception:
-            continue
-
-    dedup: List[Dict[str, str]] = []
-    seen = set()
-    for row in all_candidates:
-        key = row['url']
-        if key in seen:
-            continue
-        seen.add(key)
-        dedup.append(row)
-    return dedup, last_html
-
-
-def choose_best_researchmap(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
-    if not candidates:
-        return None
-
-    target = re.sub(r'\s+', '', normalize_text(name)).lower()
-    best_row: Optional[Dict[str, str]] = None
-    best_score = -1
-
-    for row in candidates:
-        label = re.sub(r'\s+', '', normalize_text(row.get('display_name'))).lower()
-        if not label:
-            continue
-        score = 0
-        if label == target:
-            score = 100
-        elif label.startswith(target) or target.startswith(label):
-            score = 90
-        elif target in label or label in target:
-            score = 80
-        elif label[:2] and label[:2] in target:
-            score = 60
-        if score > best_score:
-            best_score = score
-            best_row = row
-
-    return best_row or candidates[0]
-
-
-def _items_from_graph_node(node: Dict[str, object]) -> List[Dict[str, object]]:
-    items = node.get('items', [])
-    if isinstance(items, list):
-        return [item for item in items if isinstance(item, dict)]
-    return []
-
-
 def extract_profile_from_researchmap_json(payload: Dict[str, object]) -> Dict[str, List[str]]:
     research_topics: List[str] = []
     research_fields: List[str] = []
@@ -421,10 +611,12 @@ def extract_profile_from_researchmap_json(payload: Dict[str, object]) -> Dict[st
             continue
         node_type = normalize_text(node.get('@type') or '')
         lower_type = node_type.lower()
-        items = _items_from_graph_node(node)
+        items = node.get('items', []) if isinstance(node.get('items', []), list) else []
 
         if 'research_areas' in lower_type:
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 discipline = _localized_text(item.get('discipline'))
                 field = _localized_text(item.get('research_field'))
                 if field:
@@ -435,6 +627,8 @@ def extract_profile_from_researchmap_json(payload: Dict[str, object]) -> Dict[st
 
         if 'research_interest' in lower_type:
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 keyword = _localized_text(
                     item.get('research_interest')
                     or item.get('research_keyword')
@@ -448,6 +642,8 @@ def extract_profile_from_researchmap_json(payload: Dict[str, object]) -> Dict[st
 
         if 'research_project' in lower_type:
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 title = _localized_text(
                     item.get('research_project_title')
                     or item.get('project_title')
@@ -460,6 +656,8 @@ def extract_profile_from_researchmap_json(payload: Dict[str, object]) -> Dict[st
 
         if 'paper' in lower_type:
             for item in items:
+                if not isinstance(item, dict):
+                    continue
                 title = _localized_text(
                     item.get('paper_title')
                     or item.get('article_title')
@@ -478,13 +676,44 @@ def extract_profile_from_researchmap_json(payload: Dict[str, object]) -> Dict[st
     }
 
 
-def _fallback_extract_research_projects_from_html(html: str) -> List[str]:
-    soup = BeautifulSoup(html, 'lxml')
-    matched_dds = _find_all_dds(soup, [r'研究課題'])
-    topics: List[str] = []
-    for dd in matched_dds:
-        topics.extend(_extract_lines_from_dd(dd))
-    return unique_keep_order(topics)
+def _fetch_researchmap_subpages(profile_url: str, cache_dir: Path) -> Dict[str, List[str]]:
+    collected: Dict[str, List[str]] = {
+        'research_topics': [],
+        'research_fields': [],
+        'research_keywords': [],
+        'papers': [],
+    }
+    for suffix, target_key in RESEARCHMAP_SUBPAGE_SUFFIXES.items():
+        url = f'{profile_url.rstrip("/")}/{suffix}'
+        cache_path = cache_dir / f'{slugify(profile_url)}__{suffix}.html'
+        try:
+            html = fetch(url)
+            cache_path.write_text(html, encoding='utf-8')
+        except Exception:
+            if cache_path.exists():
+                html = cache_path.read_text(encoding='utf-8')
+            else:
+                continue
+
+        parsed = extract_topics_and_papers_from_html(html)
+        if target_key == 'research_topics':
+            collected[target_key].extend(parsed.get('research_topics', []))
+            if not parsed.get('research_topics'):
+                collected[target_key].extend(_extract_by_heading_patterns(html, [r'研究課題', r'^Research projects?$']))
+        elif target_key == 'research_fields':
+            collected[target_key].extend(parsed.get('research_fields', []))
+            if not parsed.get('research_fields'):
+                collected[target_key].extend(_extract_by_heading_patterns(html, [r'^研究分野$', r'^Research fields?$']))
+        elif target_key == 'research_keywords':
+            collected[target_key].extend(parsed.get('research_keywords', []))
+            if not parsed.get('research_keywords'):
+                collected[target_key].extend(_extract_by_heading_patterns(html, [r'^研究キーワード$', r'^Research keywords?$', r'^Research interests?$']))
+        elif target_key == 'papers':
+            collected[target_key].extend(parsed.get('papers', []))
+            if not parsed.get('papers'):
+                collected[target_key].extend(_extract_by_heading_patterns(html, [r'論文', r'paper', r'articles?']))
+
+    return {key: unique_keep_order(values) for key, values in collected.items()}
 
 
 def enrich_teacher_from_researchmap(name: str, cache_dir: str | Path) -> Dict[str, object]:
@@ -499,37 +728,68 @@ def enrich_teacher_from_researchmap(name: str, cache_dir: str | Path) -> Dict[st
         if last_search_html:
             search_cache_path.write_text(last_search_html, encoding='utf-8')
 
-        best = choose_best_researchmap(name, candidates)
+        best = choose_best(name, candidates)
         if not best:
             return _empty_result('researchmap_not_found', source='researchmap')
 
-        permalink = normalize_text(best.get('permalink')) or _extract_researchmap_permalink(best.get('url', ''))
+        profile_url = normalize_text(best.get('url', ''))
+        permalink = normalize_text(best.get('permalink', '')) or _extract_researchmap_permalink(profile_url)
         if not permalink:
-            return _empty_result('researchmap_permalink_not_found', matched_url=best.get('url', ''), source='researchmap')
+            return _empty_result('researchmap_permalink_not_found', matched_url=profile_url, source='researchmap')
+
+        merged: Dict[str, List[str]] = {
+            'research_topics': [],
+            'research_fields': [],
+            'research_keywords': [],
+            'papers': [],
+        }
 
         api_url = f'{DEFAULT_RESEARCHMAP_API_URL.rstrip("/")}/{permalink}'
-        time.sleep(0.15)
-        payload = fetch_json(api_url, params={'format': 'json'})
-        json_cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-        parsed = extract_profile_from_researchmap_json(payload)
+        try:
+            time.sleep(0.1)
+            payload = fetch_json(api_url, params={'format': 'json'})
+            json_cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+            api_parsed = extract_profile_from_researchmap_json(payload)
+            for key in merged:
+                merged[key].extend(api_parsed.get(key, []))
+        except Exception:
+            if json_cache_path.exists():
+                try:
+                    payload = json.loads(json_cache_path.read_text(encoding='utf-8'))
+                    api_parsed = extract_profile_from_researchmap_json(payload)
+                    for key in merged:
+                        merged[key].extend(api_parsed.get(key, []))
+                except Exception:
+                    pass
 
-        if not parsed['research_topics']:
-            try:
-                profile_html = fetch(best['url'])
-                profile_cache_path.write_text(profile_html, encoding='utf-8')
-                parsed['research_topics'] = unique_keep_order(
-                    parsed['research_topics'] + _fallback_extract_research_projects_from_html(profile_html)
-                )
-            except Exception:
-                pass
+        try:
+            html = fetch(profile_url)
+            profile_cache_path.write_text(html, encoding='utf-8')
+        except Exception:
+            html = profile_cache_path.read_text(encoding='utf-8') if profile_cache_path.exists() else ''
 
-        return {
+        if html:
+            html_parsed = extract_topics_and_papers_from_html(html)
+            for key in merged:
+                merged[key].extend(html_parsed.get(key, []))
+
+        subpage_parsed = _fetch_researchmap_subpages(profile_url, cache_dir)
+        for key in merged:
+            merged[key].extend(subpage_parsed.get(key, []))
+
+        result = {
             'status': 'ok_researchmap_fallback',
-            'matched_url': best['url'],
+            'matched_url': profile_url,
             'matched_display_name': best.get('display_name', ''),
             'profile_source': 'researchmap',
-            **parsed,
+            'research_topics': unique_keep_order(merged['research_topics']),
+            'research_fields': unique_keep_order(merged['research_fields']),
+            'research_keywords': unique_keep_order(merged['research_keywords']),
+            'papers': unique_keep_order(merged['papers']),
         }
+        if _has_profile_data(result):
+            return result
+        return _empty_result('researchmap_profile_empty', matched_url=profile_url, source='researchmap')
     except Exception as exc:
         if json_cache_path.exists():
             try:
@@ -546,11 +806,7 @@ def enrich_teacher_from_researchmap(name: str, cache_dir: str | Path) -> Dict[st
                 pass
         if profile_cache_path.exists():
             try:
-                cached_html = profile_cache_path.read_text(encoding='utf-8')
-                parsed = extract_topics_and_papers_from_html(cached_html)
-                parsed['research_topics'] = unique_keep_order(
-                    parsed.get('research_topics', []) + _fallback_extract_research_projects_from_html(cached_html)
-                )
+                parsed = extract_topics_and_papers_from_html(profile_cache_path.read_text(encoding='utf-8'))
                 return {
                     'status': 'researchmap_html_cache_fallback',
                     'matched_url': '',
