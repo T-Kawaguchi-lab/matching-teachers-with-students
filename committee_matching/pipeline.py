@@ -67,12 +67,14 @@ def build_trios_lookup(teachers_df: pd.DataFrame, root_dir: Path) -> Dict[str, D
         norm = normalize_name(name)
         if norm in lookup:
             continue
-        lookup[norm] = enrich_teacher_from_trios(
+        result = enrich_teacher_from_trios(
             name=str(name),
             base_url=str(cfg["trios_base_url"]),
             cache_dir=root_dir / str(cfg["trios_cache_dir"]),
             trios_url="",
         )
+        result.setdefault("teacher_name", str(name))
+        lookup[norm] = result
 
     return lookup
 
@@ -137,7 +139,6 @@ def run_pipeline(
             },
         )
 
-        # 詳細類似度は全教員分を出力
         scores_df, _ = top_matches_for_group(
             group_students,
             group_teachers,
@@ -145,7 +146,6 @@ def run_pipeline(
             top_k=None,
         )
 
-        # 推薦結果は従来どおり上位件数だけ
         _, rec_df = top_matches_for_group(
             group_students,
             group_teachers,
@@ -183,6 +183,21 @@ def run_pipeline(
     )
     scores_all.to_csv(scores_csv, index=False)
 
+    lookup_summary = {
+        "total": int(len(trios_lookup)),
+        "by_status": {},
+        "by_source": {},
+        "missing_teachers": [],
+    }
+    for raw in trios_lookup.values():
+        status_key = str(raw.get("status", ""))
+        source_key = str(raw.get("profile_source", ""))
+        lookup_summary["by_status"][status_key] = int(lookup_summary["by_status"].get(status_key, 0)) + 1
+        lookup_summary["by_source"][source_key] = int(lookup_summary["by_source"].get(source_key, 0)) + 1
+        has_any = any(raw.get(key) for key in ["research_topics", "research_fields", "research_keywords", "papers"])
+        if not has_any:
+            lookup_summary["missing_teachers"].append(str(raw.get("teacher_name", "")))
+
     status = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "teacher_input": _file_meta(teacher_file),
@@ -192,6 +207,7 @@ def run_pipeline(
         "teachers_count": int(len(teachers)),
         "scores_count": int(len(scores_all)),
         "recommendations_count": int(len(rec_all)),
+        "lookup_summary": lookup_summary,
         "groups": {
             g: {
                 "students": int((students["group"] == g).sum()),

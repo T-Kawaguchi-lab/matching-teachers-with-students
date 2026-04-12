@@ -8,6 +8,9 @@ on:
       - 'incoming/teachers_latest.xlsx'
       - 'incoming/students_latest.xlsx'
       - 'data_sources/master_title.xlsx'
+      - 'committee_matching/**'
+      - 'app/**'
+      - 'streamlit_app.py'
       - '.github/workflows/process_matching.yml'
   workflow_dispatch:
 

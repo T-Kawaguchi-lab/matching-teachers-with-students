@@ -5,7 +5,7 @@ import re
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -34,17 +34,23 @@ CONTROL_LINES = {
 }
 
 SECTION_PATTERNS: Dict[str, List[str]] = {
-    "research_fields": [r"研究分野", r"Research field"],
-    "research_keywords": [r"研究キーワード", r"keyword"],
-    "research_topics": [r"研究課題", r"競争的資金等の研究課題"],
-    "papers": [r"論文"],
+    "research_fields": [r"研究分野", r"Research field", r"Research fields"],
+    "research_keywords": [r"研究キーワード", r"keyword", r"Research keywords"],
+    "research_topics": [r"研究課題", r"競争的資金等の研究課題", r"Research projects"],
+    "papers": [r"論文", r"Refereed academic journal/Refereed international conference paper"],
 }
 STOP_SECTION_PATTERNS: List[str] = [
     r"研究分野",
+    r"Research field",
     r"研究キーワード",
+    r"keyword",
+    r"Research keywords",
     r"研究課題",
     r"競争的資金等の研究課題",
+    r"Research projects",
     r"論文",
+    r"Refereed academic journal/Refereed international conference paper",
+    r"Conference, etc.",
     r"^MISC",
     r"特許",
     r"書籍",
@@ -53,7 +59,8 @@ STOP_SECTION_PATTERNS: List[str] = [
     r"学位",
     r"所属学協会",
     r"経歴",
-    r"学歴",
+    r"Career history",
+    r"Academic background",
     r"委員歴",
     r"社会貢献活動",
     r"受賞",
@@ -61,8 +68,8 @@ STOP_SECTION_PATTERNS: List[str] = [
     r"研究者データベース",
 ]
 
-DETAIL_PATH_RE = re.compile(r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[^\s\"'&<>]+(?:&[^\s\"'<>]*)?")
-DETAIL_ID_RE = re.compile(r"JGLOBAL_ID=[^\s\"'&<>]+")
+TRIOS_LINK_PATTERNS = [r"/researcher/\d{6,}", r"/researchers/\d{6,}"]
+JGLOBAL_LINK_PATTERNS = [r"/detail\?JGLOBAL_ID=", r"https://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID="]
 
 
 def _build_session() -> requests.Session:
@@ -203,7 +210,7 @@ def _line_has_heading_shape(line: str) -> bool:
     line = normalize_text(line)
     if not line:
         return False
-    return ("：" in line or ":" in line or bool(re.search(r"\(\d+件\)", line)) or len(line) <= 30)
+    return ("：" in line or ":" in line or bool(re.search(r"\(\d+件\)", line)) or len(line) <= 40)
 
 
 def _looks_like_section_start(line: str) -> bool:
@@ -306,33 +313,99 @@ def extract_topics_and_papers_from_html(html: str) -> Dict[str, List[str]]:
     }
 
 
-def search_candidates(base_url: str, name: str, per: int = 50) -> List[Dict[str, str]]:
-    quoted = urllib.parse.quote(name)
-    url = f"{base_url}/ja/researchers?q={quoted}&per={per}"
-    html = fetch(url)
+def _extract_candidate_links(
+    html: str,
+    *,
+    base_url: str,
+    link_patterns: Sequence[str],
+) -> List[Dict[str, str]]:
     soup = BeautifulSoup(html, "lxml")
-
+    compiled = [re.compile(p, re.IGNORECASE) for p in link_patterns]
     candidates: List[Dict[str, str]] = []
-    for link in soup.select('a[href*="/researcher/"], a[href*="/researchers/"]'):
-        href = link.get("href")
-        label = link.get_text(" ", strip=True)
-        if not href or not label:
-            continue
-        if not re.search(r"/\d{6,}", href):
-            continue
+    seen = set()
+
+    def add_candidate(href: str, label: str = "") -> None:
+        href = normalize_text(href)
+        if not href:
+            return
+        if href.startswith("//"):
+            href = f"https:{href}"
+        href = urllib.parse.urljoin(base_url, href)
+        if not any(p.search(href) for p in compiled):
+            return
+        href = href.split("#", 1)[0]
+        if href in seen:
+            return
+        seen.add(href)
         candidates.append({
             "display_name": normalize_text(label),
-            "url": urllib.parse.urljoin(base_url, href),
+            "url": href,
         })
 
-    dedup: List[Dict[str, str]] = []
-    seen = set()
-    for row in candidates:
-        if row["url"] in seen:
-            continue
-        seen.add(row["url"])
-        dedup.append(row)
-    return dedup
+    for link in soup.select("a[href]"):
+        href = normalize_text(link.get("href"))
+        label = normalize_text(link.get_text(" ", strip=True))
+        if href.startswith("/l/?") and "uddg=" in href:
+            href = urllib.parse.unquote(href.split("uddg=", 1)[1])
+        elif "uddg=" in href and href.startswith("https://duckduckgo.com/l/?"):
+            href = urllib.parse.unquote(href.split("uddg=", 1)[1])
+        add_candidate(href, label)
+
+    if any("JGLOBAL_ID" in p for p in link_patterns):
+        for matched in re.findall(r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[^\s\"'&<>]+(?:&[^\s\"'<>]*)?", html):
+            add_candidate(matched)
+        for matched_id in re.findall(r"JGLOBAL_ID=[^\s\"'&<>]+", html):
+            add_candidate(f"{base_url}/detail?{matched_id}")
+
+    return candidates
+
+
+def _search_candidates_by_templates(
+    *,
+    base_url: str,
+    name: str,
+    search_templates: Sequence[Tuple[str, str]],
+    link_patterns: Sequence[str],
+    session: Optional[requests.Session] = None,
+) -> List[Dict[str, str]]:
+    session = session or _build_session()
+    query_variants = unique_keep_order([
+        normalize_text(name),
+        normalize_text(name).replace(" ", ""),
+    ])
+
+    for query in query_variants:
+        for search_url, param_name in search_templates:
+            try:
+                html = fetch(search_url, params={param_name: query}, session=session)
+            except Exception:
+                continue
+            candidates = _extract_candidate_links(html, base_url=base_url, link_patterns=link_patterns)
+            if candidates:
+                return candidates
+    return []
+
+
+def search_candidates(base_url: str, name: str, per: int = 50) -> List[Dict[str, str]]:
+    session = _build_session()
+    search_templates = [
+        (f"{base_url}/ja/researchers", "q"),
+        (f"{base_url}/ja/researchers", "keyword"),
+    ]
+    candidates = _search_candidates_by_templates(
+        base_url=base_url,
+        name=name,
+        search_templates=search_templates,
+        link_patterns=TRIOS_LINK_PATTERNS,
+        session=session,
+    )
+    if candidates:
+        return candidates
+
+    quoted = urllib.parse.quote(name)
+    url = f"{base_url}/ja/researchers?q={quoted}&per={per}"
+    html = fetch(url, session=session)
+    return _extract_candidate_links(html, base_url=base_url, link_patterns=TRIOS_LINK_PATTERNS)
 
 
 def choose_best(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
@@ -417,51 +490,6 @@ def _empty_result(status: str, matched_url: str = "", error: str = "", source: s
     return payload
 
 
-def _extract_detail_candidates_from_html(html: str, *, source: str) -> List[Dict[str, str]]:
-    soup = BeautifulSoup(html, "lxml")
-    results: List[Dict[str, str]] = []
-    seen = set()
-
-    def add_candidate(url: str, display_name: str = "") -> None:
-        normalized_url = normalize_text(url)
-        if not normalized_url:
-            return
-        if normalized_url.startswith("//"):
-            normalized_url = f"https:{normalized_url}"
-        if normalized_url.startswith("/"):
-            normalized_url = urllib.parse.urljoin(DEFAULT_JGLOBAL_BASE_URL, normalized_url)
-        if "jglobal.jst.go.jp/detail" not in normalized_url or "JGLOBAL_ID=" not in normalized_url:
-            return
-        normalized_url = urllib.parse.urljoin(DEFAULT_JGLOBAL_BASE_URL, normalized_url)
-        normalized_url = normalized_url.split("#", 1)[0]
-        if normalized_url in seen:
-            return
-        seen.add(normalized_url)
-        results.append({
-            "display_name": normalize_text(display_name),
-            "url": normalized_url,
-            "source": source,
-        })
-
-    for link in soup.select("a[href]"):
-        href = normalize_text(link.get("href"))
-        if not href:
-            continue
-        if href.startswith("/l/?") and "uddg=" in href:
-            href = urllib.parse.unquote(href.split("uddg=", 1)[1])
-        elif "uddg=" in href and href.startswith("https://duckduckgo.com/l/?"):
-            href = urllib.parse.unquote(href.split("uddg=", 1)[1])
-        add_candidate(href, link.get_text(" ", strip=True))
-
-    for matched_url in DETAIL_PATH_RE.findall(html):
-        add_candidate(matched_url)
-
-    for matched_id in DETAIL_ID_RE.findall(html):
-        add_candidate(f"{DEFAULT_JGLOBAL_BASE_URL}/detail?{matched_id}")
-
-    return results
-
-
 def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
     session = _build_session()
     queries = [
@@ -475,49 +503,98 @@ def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
             html = fetch("https://duckduckgo.com/html/", params={"q": query}, session=session)
         except Exception:
             continue
-        candidates = _extract_detail_candidates_from_html(html, source="duckduckgo")
+        candidates = _extract_candidate_links(html, base_url=DEFAULT_JGLOBAL_BASE_URL, link_patterns=JGLOBAL_LINK_PATTERNS)
         if candidates:
             return candidates
     return []
 
 
-def _search_jglobal_first_results(name: str) -> List[Dict[str, str]]:
-    """
-    J-GLOBAL サイト内検索の HTML から detail?JGLOBAL_ID=... を拾う。
-    サイト構造の揺れを考慮して複数 URL パターンを順に試す。
-    """
-    session = _build_session()
-    query_variants = unique_keep_order([
-        normalize_text(name),
-        normalize_text(name).replace(" ", ""),
-    ])
-    search_targets = [
-        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "q"),
-        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings", "q"),
-        (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "q"),
-        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "keyword"),
-        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings", "keyword"),
-    ]
-
-    for query in query_variants:
-        for search_url, param_name in search_targets:
-            try:
-                html = fetch(search_url, params={param_name: query}, session=session)
-            except Exception:
-                continue
-            candidates = _extract_detail_candidates_from_html(html, source="jglobal_search")
-            if candidates:
-                return candidates
-    return []
-
-
 def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
-    # まず外部検索エンジン経由で detail ページを直接見つける。
-    # J-GLOBAL のサイト内検索は SPA/動的描画の影響を受けやすいため、その次に試す。
-    candidates = _search_jglobal_via_duckduckgo(name)
+    session = _build_session()
+    search_templates = [
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "q"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "keyword"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings", "q"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings", "keyword"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "q"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "keyword"),
+    ]
+    candidates = _search_candidates_by_templates(
+        base_url=DEFAULT_JGLOBAL_BASE_URL,
+        name=name,
+        search_templates=search_templates,
+        link_patterns=JGLOBAL_LINK_PATTERNS,
+        session=session,
+    )
     if candidates:
         return candidates
-    return _search_jglobal_first_results(name)
+    return _search_jglobal_via_duckduckgo(name)
+
+
+def _fetch_profile_from_candidates(
+    *,
+    name: str,
+    candidates: List[Dict[str, str]],
+    cache_dir: Path,
+    cache_key: str,
+    source: str,
+) -> Dict[str, object]:
+    session = _build_session()
+    tried_urls: List[str] = []
+    best_nonempty: Optional[Dict[str, object]] = None
+    best_score = -1
+
+    for idx, candidate in enumerate(candidates[:10], start=1):
+        url = normalize_text(candidate.get("url"))
+        if not url:
+            continue
+
+        tried_urls.append(url)
+        cache_path = cache_dir / f"{cache_key}__{source}_{idx}.html"
+
+        try:
+            time.sleep(0.15)
+            response = fetch_response(url, session=session)
+            html = response.text
+            final_url = normalize_text(response.url) or url
+            cache_path.write_text(html, encoding="utf-8")
+        except Exception:
+            if not cache_path.exists():
+                continue
+            html = cache_path.read_text(encoding="utf-8")
+            final_url = url
+
+        parsed = extract_topics_and_papers_from_html(html)
+        display_name = _parse_jglobal_display_name(html) if source == "jglobal" else normalize_text(candidate.get("display_name"))
+        if not display_name:
+            display_name = normalize_text(candidate.get("display_name"))
+        score = _score_candidate_for_name(name, display_name)
+
+        result = {
+            "status": "ok" if source == "trios" else "ok_jglobal_fallback",
+            "matched_url": final_url,
+            "matched_display_name": display_name,
+            "profile_source": source,
+            "research_topics": parsed.get("research_topics", []),
+            "research_fields": parsed.get("research_fields", []),
+            "research_keywords": parsed.get("research_keywords", []),
+            "papers": parsed.get("papers", []),
+        }
+
+        if _has_profile_data(result) and score >= 100:
+            return result
+        if _has_profile_data(result) and score > best_score:
+            best_nonempty = result
+            best_score = score
+
+    if best_nonempty is not None:
+        best_nonempty["tried_candidates"] = " | ".join(tried_urls)
+        return best_nonempty
+
+    return {
+        **_empty_result(f"{source}_profile_empty", source=source),
+        "tried_candidates": " | ".join(tried_urls),
+    }
 
 
 def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, object]:
@@ -529,63 +606,13 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
         candidates = search_jglobal_candidates(name)
         if not candidates:
             return _empty_result("jglobal_not_found", source="jglobal")
-
-        tried_urls: List[str] = []
-        best_nonempty: Optional[Dict[str, object]] = None
-        best_score = -1
-        session = _build_session()
-
-        for idx, candidate in enumerate(candidates[:10], start=1):
-            url = normalize_text(candidate.get("url"))
-            if not url:
-                continue
-
-            tried_urls.append(url)
-            cache_path = cache_dir / f"{cache_key}__jglobal_{idx}.html"
-
-            try:
-                time.sleep(0.15)
-                response = fetch_response(url, session=session)
-                html = response.text
-                final_url = normalize_text(response.url) or url
-                cache_path.write_text(html, encoding="utf-8")
-            except Exception:
-                if not cache_path.exists():
-                    continue
-                html = cache_path.read_text(encoding="utf-8")
-                final_url = url
-
-            parsed = extract_topics_and_papers_from_html(html)
-            display_name = _parse_jglobal_display_name(html) or normalize_text(candidate.get("display_name"))
-            score = _score_candidate_for_name(name, display_name)
-
-            result = {
-                "status": "ok_jglobal_fallback",
-                "matched_url": final_url,
-                "matched_display_name": display_name,
-                "profile_source": "jglobal",
-                "research_topics": parsed.get("research_topics", []),
-                "research_fields": parsed.get("research_fields", []),
-                "research_keywords": parsed.get("research_keywords", []),
-                "papers": parsed.get("papers", []),
-            }
-
-            if _has_profile_data(result) and score >= 100:
-                return result
-
-            if _has_profile_data(result) and score > best_score:
-                best_nonempty = result
-                best_score = score
-
-        if best_nonempty is not None:
-            best_nonempty["tried_candidates"] = " | ".join(tried_urls)
-            return best_nonempty
-
-        return {
-            **_empty_result("jglobal_profile_empty", source="jglobal"),
-            "tried_candidates": " | ".join(tried_urls),
-        }
-
+        return _fetch_profile_from_candidates(
+            name=name,
+            candidates=candidates,
+            cache_dir=cache_dir,
+            cache_key=cache_key,
+            source="jglobal",
+        )
     except Exception as exc:
         return _empty_result("jglobal_error", error=str(exc), source="jglobal")
 
@@ -619,18 +646,15 @@ def enrich_teacher_from_trios(name: str, base_url: str, cache_dir: str | Path, t
         candidates = search_candidates(base_url, name)
         best = choose_best(name, candidates)
         if best:
-            time.sleep(0.15)
-            html = fetch(best["url"])
-            cache_path.write_text(html, encoding="utf-8")
-            parsed = extract_topics_and_papers_from_html(html)
-            if _has_profile_data(parsed):
-                return {
-                    "status": "ok",
-                    "matched_url": best["url"],
-                    "matched_display_name": best["display_name"],
-                    "profile_source": "trios",
-                    **parsed,
-                }
+            result = _fetch_profile_from_candidates(
+                name=name,
+                candidates=[best] + [c for c in candidates if c is not best],
+                cache_dir=cache_dir,
+                cache_key=slugify(name),
+                source="trios",
+            )
+            if _has_profile_data(result):
+                return result
 
         return enrich_teacher_from_jglobal(name, cache_dir)
 
