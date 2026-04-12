@@ -1,9 +1,5 @@
-# committee_matching/trios.py
-# 下の内容で丸ごと置き換えてください
-
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -92,6 +88,13 @@ STOP_SECTION_PATTERNS: List[str] = [
 
 TRIOS_LINK_PATTERNS = [r"/researcher/\d{6,}", r"/researchers/\d{6,}"]
 JGLOBAL_LINK_PATTERNS = [r"/detail\?JGLOBAL_ID=", r"https://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID="]
+
+# 既知の J-GLOBAL 直リンク
+# 検索で拾えない人はここに追加すれば、直接取得できます
+KNOWN_JGLOBAL_URLS: Dict[str, str] = {
+    normalize_name("大西 正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
+    normalize_name("大西正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
+}
 
 
 def _build_session() -> requests.Session:
@@ -222,7 +225,7 @@ def _split_inline_items(text: str) -> List[str]:
     text = normalize_text(text)
     if not text:
         return []
-    for sep in ["，", "、", ";", "；", "|", "｜"]:
+    for sep in ["，", "、", ";", "；", "|", "｜", "/", "／"]:
         text = text.replace(sep, "\n")
     items = [normalize_text(x) for x in text.splitlines() if normalize_text(x)]
     return unique_keep_order(items)
@@ -381,17 +384,6 @@ def _extract_candidate_links(
             add_candidate(matched)
         for matched_id in re.findall(r"JGLOBAL_ID=[^\s\"'&<>]+", html):
             add_candidate(f"{base_url}/detail?{matched_id}")
-
-        # JSON-LD や script 内の URL も拾う
-        for script in soup.find_all("script"):
-            text = script.string or script.get_text(" ", strip=True) or ""
-            if "JGLOBAL_ID=" not in text:
-                continue
-            for matched in re.findall(
-                r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[A-Za-z0-9]+",
-                text,
-            ):
-                add_candidate(matched)
 
     return candidates
 
@@ -572,67 +564,16 @@ def _search_jglobal_via_bing(name: str) -> List[Dict[str, str]]:
     return []
 
 
-def _search_jglobal_via_researchmap(name: str) -> List[Dict[str, str]]:
-    """
-    researchmap は J-GLOBAL と同じ JST 系列データに強く、
-    GitHub Actions 上で DuckDuckGo が取りこぼすケースの保険。
-    researchmap の検索結果や個人ページ HTML 内にある J-GLOBAL detail URL を拾う。
-    """
-    session = _build_session()
-    query_variants = unique_keep_order([
-        normalize_text(name),
-        normalize_text(name).replace(" ", ""),
-    ])
-
-    urls = [
-        "https://researchmap.jp/researchers",
-        "https://researchmap.jp/search",
-    ]
-
-    for q in query_variants:
-        for url in urls:
-            for key in ["q", "keyword", "search"]:
-                try:
-                    html = fetch(url, params={key: q}, session=session)
-                except Exception:
-                    continue
-                candidates = _extract_candidate_links(
-                    html,
-                    base_url=DEFAULT_JGLOBAL_BASE_URL,
-                    link_patterns=JGLOBAL_LINK_PATTERNS,
-                )
-                if candidates:
-                    return candidates
-
-    return []
-
-
-def _search_jglobal_via_direct_detail_guess(name: str) -> List[Dict[str, str]]:
-    """
-    最後の最後の保険。
-    大西正輝のように検索導線で落ちても、外部検索結果や既知の detail URL 断片が
-    HTML/ログ/キャッシュに残っている場合があるので、
-    名前を使った一般検索エンジン結果から detail URL を総当たりで拾う。
-    """
-    candidates: List[Dict[str, str]] = []
-    seen = set()
-
-    for finder in (_search_jglobal_via_duckduckgo, _search_jglobal_via_bing, _search_jglobal_via_researchmap):
-        try:
-            rows = finder(name)
-        except Exception:
-            rows = []
-        for row in rows:
-            url = normalize_text(row.get("url"))
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            candidates.append(row)
-
-    return candidates
-
-
 def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
+    # まず既知URLを最優先
+    norm = normalize_name(name)
+    direct_url = KNOWN_JGLOBAL_URLS.get(norm)
+    if direct_url:
+        return [{
+            "display_name": normalize_text(name),
+            "url": direct_url,
+        }]
+
     session = _build_session()
     search_templates = [
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "q"),
@@ -643,7 +584,6 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "keyword"),
     ]
 
-    # 1. まず J-GLOBAL サイト内検索
     candidates = _search_candidates_by_templates(
         base_url=DEFAULT_JGLOBAL_BASE_URL,
         name=name,
@@ -654,23 +594,15 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
     if candidates:
         return candidates
 
-    # 2. DuckDuckGo
     candidates = _search_jglobal_via_duckduckgo(name)
     if candidates:
         return candidates
 
-    # 3. Bing
     candidates = _search_jglobal_via_bing(name)
     if candidates:
         return candidates
 
-    # 4. researchmap 経由
-    candidates = _search_jglobal_via_researchmap(name)
-    if candidates:
-        return candidates
-
-    # 5. まとめて総当たり
-    return _search_jglobal_via_direct_detail_guess(name)
+    return []
 
 
 def _fetch_profile_from_candidates(
@@ -746,16 +678,37 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
     cache_key = slugify(name)
 
     try:
+        # 既知URLなら直接ここで取得
+        norm = normalize_name(name)
+        direct_url = KNOWN_JGLOBAL_URLS.get(norm)
+        if direct_url:
+            result = _fetch_profile_from_candidates(
+                name=name,
+                candidates=[{
+                    "display_name": normalize_text(name),
+                    "url": direct_url,
+                }],
+                cache_dir=cache_dir,
+                cache_key=cache_key,
+                source="jglobal",
+            )
+            if _has_profile_data(result):
+                result["status"] = "ok_jglobal_direct"
+                result["matched_url"] = direct_url
+                return result
+
         candidates = search_jglobal_candidates(name)
         if not candidates:
             return _empty_result("jglobal_not_found", source="jglobal")
-        return _fetch_profile_from_candidates(
+
+        result = _fetch_profile_from_candidates(
             name=name,
             candidates=candidates,
             cache_dir=cache_dir,
             cache_key=cache_key,
             source="jglobal",
         )
+        return result
     except Exception as exc:
         return _empty_result("jglobal_error", error=str(exc), source="jglobal")
 
