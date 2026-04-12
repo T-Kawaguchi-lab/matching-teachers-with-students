@@ -14,7 +14,10 @@ from .utils import normalize_name, normalize_text, slugify, unique_keep_order
 
 
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; thesis-committee-matcher/1.0)"
+    "User-Agent": "Mozilla/5.0 (compatible; thesis-committee-matcher/1.0)",
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
 }
 DEFAULT_JGLOBAL_BASE_URL = "https://jglobal.jst.go.jp"
 REQUEST_TIMEOUT = 20
@@ -33,13 +36,14 @@ CONTROL_LINES = {
 SECTION_PATTERNS: Dict[str, List[str]] = {
     "research_fields": [r"研究分野", r"Research field"],
     "research_keywords": [r"研究キーワード", r"keyword"],
-    "research_topics": [r"研究課題"],
+    "research_topics": [r"研究課題", r"競争的資金等の研究課題"],
     "papers": [r"論文"],
 }
 STOP_SECTION_PATTERNS: List[str] = [
     r"研究分野",
     r"研究キーワード",
     r"研究課題",
+    r"競争的資金等の研究課題",
     r"論文",
     r"^MISC",
     r"特許",
@@ -56,6 +60,15 @@ STOP_SECTION_PATTERNS: List[str] = [
     r"担当経験のある科目",
     r"研究者データベース",
 ]
+
+DETAIL_PATH_RE = re.compile(r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[^\s\"'&<>]+(?:&[^\s\"'<>]*)?")
+DETAIL_ID_RE = re.compile(r"JGLOBAL_ID=[^\s\"'&<>]+")
+
+
+def _build_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+    return session
 
 
 def fetch_response(
@@ -404,111 +417,107 @@ def _empty_result(status: str, matched_url: str = "", error: str = "", source: s
     return payload
 
 
-def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
-    session = requests.Session()
-    session.headers.update(DEFAULT_HEADERS)
+def _extract_detail_candidates_from_html(html: str, *, source: str) -> List[Dict[str, str]]:
+    soup = BeautifulSoup(html, "lxml")
+    results: List[Dict[str, str]] = []
+    seen = set()
 
+    def add_candidate(url: str, display_name: str = "") -> None:
+        normalized_url = normalize_text(url)
+        if not normalized_url:
+            return
+        if normalized_url.startswith("//"):
+            normalized_url = f"https:{normalized_url}"
+        if normalized_url.startswith("/"):
+            normalized_url = urllib.parse.urljoin(DEFAULT_JGLOBAL_BASE_URL, normalized_url)
+        if "jglobal.jst.go.jp/detail" not in normalized_url or "JGLOBAL_ID=" not in normalized_url:
+            return
+        normalized_url = urllib.parse.urljoin(DEFAULT_JGLOBAL_BASE_URL, normalized_url)
+        normalized_url = normalized_url.split("#", 1)[0]
+        if normalized_url in seen:
+            return
+        seen.add(normalized_url)
+        results.append({
+            "display_name": normalize_text(display_name),
+            "url": normalized_url,
+            "source": source,
+        })
+
+    for link in soup.select("a[href]"):
+        href = normalize_text(link.get("href"))
+        if not href:
+            continue
+        if href.startswith("/l/?") and "uddg=" in href:
+            href = urllib.parse.unquote(href.split("uddg=", 1)[1])
+        elif "uddg=" in href and href.startswith("https://duckduckgo.com/l/?"):
+            href = urllib.parse.unquote(href.split("uddg=", 1)[1])
+        add_candidate(href, link.get_text(" ", strip=True))
+
+    for matched_url in DETAIL_PATH_RE.findall(html):
+        add_candidate(matched_url)
+
+    for matched_id in DETAIL_ID_RE.findall(html):
+        add_candidate(f"{DEFAULT_JGLOBAL_BASE_URL}/detail?{matched_id}")
+
+    return results
+
+
+def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
+    session = _build_session()
     queries = [
         f'site:jglobal.jst.go.jp/detail?JGLOBAL_ID= "{normalize_text(name)}"',
         f"site:jglobal.jst.go.jp/detail?JGLOBAL_ID= {normalize_text(name)}",
+        f'site:jglobal.jst.go.jp/detail?JGLOBAL_ID= "{normalize_text(name).replace(" ", "")}"',
     ]
-    candidates: List[Dict[str, str]] = []
-    seen = set()
 
     for query in queries:
         try:
             html = fetch("https://duckduckgo.com/html/", params={"q": query}, session=session)
         except Exception:
             continue
-
-        soup = BeautifulSoup(html, "lxml")
-        for link in soup.select("a[href]"):
-            href = normalize_text(link.get("href"))
-            if not href:
-                continue
-            if href.startswith("/l/?kh=1&uddg="):
-                href = urllib.parse.unquote(href.split("uddg=", 1)[1])
-            if "jglobal.jst.go.jp/detail" not in href:
-                continue
-
-            if href in seen:
-                continue
-            seen.add(href)
-
-            candidates.append({
-                "display_name": normalize_text(link.get_text(" ", strip=True)),
-                "url": href,
-                "source": "duckduckgo",
-            })
-
+        candidates = _extract_detail_candidates_from_html(html, source="duckduckgo")
         if candidates:
-            break
-
-    return candidates
+            return candidates
+    return []
 
 
 def _search_jglobal_first_results(name: str) -> List[Dict[str, str]]:
     """
-    TRIOS と同じ発想で:
-    名前検索して、検索結果に出た detail?JGLOBAL_ID=... のリンクを上から順に使う。
+    J-GLOBAL サイト内検索の HTML から detail?JGLOBAL_ID=... を拾う。
+    サイト構造の揺れを考慮して複数 URL パターンを順に試す。
     """
-    session = requests.Session()
-    session.headers.update(DEFAULT_HEADERS)
-
-    queries = [
+    session = _build_session()
+    query_variants = unique_keep_order([
         normalize_text(name),
         normalize_text(name).replace(" ", ""),
-    ]
-    search_urls = [
-        f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers",
-        f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings",
+    ])
+    search_targets = [
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "q"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings", "q"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "q"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "keyword"),
+        (f"{DEFAULT_JGLOBAL_BASE_URL}/search/anythings", "keyword"),
     ]
 
-    candidates: List[Dict[str, str]] = []
-    seen = set()
-
-    for query in queries:
-        for search_url in search_urls:
+    for query in query_variants:
+        for search_url, param_name in search_targets:
             try:
-                html = fetch(search_url, params={"q": query}, session=session)
+                html = fetch(search_url, params={param_name: query}, session=session)
             except Exception:
                 continue
-
-            soup = BeautifulSoup(html, "lxml")
-            links = soup.select('a[href*="detail?JGLOBAL_ID="]')
-
-            for link in links:
-                href = normalize_text(link.get("href"))
-                if not href:
-                    continue
-                abs_url = urllib.parse.urljoin(DEFAULT_JGLOBAL_BASE_URL, href)
-                if abs_url in seen:
-                    continue
-                seen.add(abs_url)
-
-                label = normalize_text(link.get_text(" ", strip=True))
-                if not label:
-                    parent = link.parent.get_text(" ", strip=True) if link.parent else ""
-                    label = normalize_text(parent)
-
-                candidates.append({
-                    "display_name": label,
-                    "url": abs_url,
-                    "source": "jglobal_search",
-                })
-
+            candidates = _extract_detail_candidates_from_html(html, source="jglobal_search")
             if candidates:
                 return candidates
-
     return []
 
 
 def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
-    candidates = _search_jglobal_first_results(name)
+    # まず外部検索エンジン経由で detail ページを直接見つける。
+    # J-GLOBAL のサイト内検索は SPA/動的描画の影響を受けやすいため、その次に試す。
+    candidates = _search_jglobal_via_duckduckgo(name)
     if candidates:
         return candidates
-
-    return _search_jglobal_via_duckduckgo(name)
+    return _search_jglobal_first_results(name)
 
 
 def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, object]:
@@ -524,6 +533,7 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
         tried_urls: List[str] = []
         best_nonempty: Optional[Dict[str, object]] = None
         best_score = -1
+        session = _build_session()
 
         for idx, candidate in enumerate(candidates[:10], start=1):
             url = normalize_text(candidate.get("url"))
@@ -535,7 +545,7 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
 
             try:
                 time.sleep(0.15)
-                response = fetch_response(url)
+                response = fetch_response(url, session=session)
                 html = response.text
                 final_url = normalize_text(response.url) or url
                 cache_path.write_text(html, encoding="utf-8")
