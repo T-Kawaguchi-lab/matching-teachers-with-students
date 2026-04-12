@@ -20,6 +20,7 @@ DEFAULT_HEADERS = {
     "Pragma": "no-cache",
 }
 DEFAULT_JGLOBAL_BASE_URL = "https://jglobal.jst.go.jp"
+DEFAULT_RESEARCHMAP_BASE_URL = "https://researchmap.jp"
 REQUEST_TIMEOUT = 20
 
 CONTROL_LINES = {
@@ -31,6 +32,8 @@ CONTROL_LINES = {
     "研究者",
     "TOP",
     "BOTTOM",
+    "researchmap",
+    "マイポータル",
 }
 
 SECTION_PATTERNS: Dict[str, List[str]] = {
@@ -91,13 +94,11 @@ JGLOBAL_LINK_PATTERNS = [
     r"/detail\?JGLOBAL_ID=",
     r"https://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=",
 ]
-
-# 必要ならここに固定URLを置けますが、今回は確認のため無効化しておきます
-# KNOWN_JGLOBAL_URLS: Dict[str, str] = {
-#     normalize_name("大西 正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
-#     normalize_name("大西正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
-# }
-KNOWN_JGLOBAL_URLS: Dict[str, str] = {}
+RESEARCHMAP_PROFILE_PATTERNS = [
+    r"^https://researchmap\.jp/[^/?#]+$",
+    r"^https://researchmap\.jp/read[0-9A-Za-z_]+$",
+    r"^https://researchmap\.jp/.+/?.*$",
+]
 
 
 def _build_session() -> requests.Session:
@@ -238,7 +239,7 @@ def _line_has_heading_shape(line: str) -> bool:
     line = normalize_text(line)
     if not line:
         return False
-    return ("：" in line or ":" in line or bool(re.search(r"\(\d+件\)", line)) or len(line) <= 40)
+    return ("：" in line or ":" in line or bool(re.search(r"\(\d+件\)", line)) or len(line) <= 50)
 
 
 def _looks_like_section_start(line: str) -> bool:
@@ -276,7 +277,13 @@ def _plain_text_lines(html: str) -> List[str]:
     return lines
 
 
-def _extract_section_from_lines(lines: List[str], patterns: Iterable[str], *, split_inline: bool, kind: str) -> List[str]:
+def _extract_section_from_lines(
+    lines: List[str],
+    patterns: Iterable[str],
+    *,
+    split_inline: bool,
+    kind: str,
+) -> List[str]:
     compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
     results: List[str] = []
 
@@ -320,6 +327,7 @@ def extract_topics_and_papers_from_html(html: str) -> Dict[str, List[str]]:
     research_fields = _extract_lines_from_dd(fields_dd, split_inline=True, kind="research_fields") if fields_dd else []
     research_keywords = _extract_lines_from_dd(keywords_dd, split_inline=True, kind="research_keywords") if keywords_dd else []
     research_topics = _extract_lines_from_dd(topics_dd, split_inline=False, kind="research_topics") if topics_dd else []
+
     papers: List[str] = []
     for dd in paper_dds:
         papers.extend(_extract_lines_from_dd(dd, split_inline=False, kind="papers"))
@@ -387,8 +395,7 @@ def _extract_candidate_links(
             html,
         ):
             add_candidate(matched)
-
-        for matched_id in re.findall(r"JGLOBAL_ID=[^\s\"'&<>]+", html):
+        for matched_id in re.findall(r"JGLOBAL_ID=[A-Za-z0-9]+", html):
             add_candidate(f"{base_url}/detail?{matched_id}")
 
     return candidates
@@ -584,26 +591,100 @@ def _search_jglobal_via_bing(name: str) -> List[Dict[str, str]]:
     return []
 
 
+def _search_researchmap_candidates(name: str) -> List[Dict[str, str]]:
+    session = _build_session()
+    query_variants = unique_keep_order([
+        normalize_text(name),
+        normalize_text(name).replace(" ", ""),
+    ])
+
+    search_templates = [
+        (f"{DEFAULT_RESEARCHMAP_BASE_URL}/researchers", "q"),
+        (f"{DEFAULT_RESEARCHMAP_BASE_URL}/researchers", "search"),
+        (f"{DEFAULT_RESEARCHMAP_BASE_URL}/search", "q"),
+        (f"{DEFAULT_RESEARCHMAP_BASE_URL}/search", "keyword"),
+    ]
+
+    compiled = [re.compile(p, re.IGNORECASE) for p in RESEARCHMAP_PROFILE_PATTERNS]
+    seen = set()
+    candidates: List[Dict[str, str]] = []
+
+    def add_candidate(href: str, label: str) -> None:
+        href = normalize_text(href)
+        if not href:
+            return
+        if href.startswith("//"):
+            href = f"https:{href}"
+        href = urllib.parse.urljoin(DEFAULT_RESEARCHMAP_BASE_URL, href)
+        href = href.split("#", 1)[0]
+        if not any(p.search(href) for p in compiled):
+            return
+        if "/researchers" in href and "?" in href:
+            return
+        if href in seen:
+            return
+        seen.add(href)
+        candidates.append({
+            "display_name": normalize_text(label),
+            "url": href,
+        })
+
+    for query in query_variants:
+        for search_url, key in search_templates:
+            try:
+                html = fetch(search_url, params={key: query}, session=session)
+            except Exception:
+                continue
+
+            soup = BeautifulSoup(html, "lxml")
+            for link in soup.select("a[href]"):
+                href = normalize_text(link.get("href"))
+                label = normalize_text(link.get_text(" ", strip=True))
+                add_candidate(href, label)
+
+            if candidates:
+                return candidates
+
+    return candidates
+
+
+def _extract_jglobal_url_from_researchmap_profile(html: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+
+    for link in soup.select("a[href]"):
+        href = normalize_text(link.get("href"))
+        if "jglobal.jst.go.jp/detail?JGLOBAL_ID=" in href:
+            return href.split("#", 1)[0]
+
+    for script in soup.find_all("script"):
+        text = script.string or script.get_text(" ", strip=True) or ""
+        m = re.search(r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[A-Za-z0-9]+", text)
+        if m:
+            return m.group(0)
+
+    m = re.search(r"JGLOBAL_ID=([A-Za-z0-9]+)", html)
+    if m:
+        return f"{DEFAULT_JGLOBAL_BASE_URL}/detail?JGLOBAL_ID={m.group(1)}"
+
+    return ""
+
+
+def _extract_profile_from_researchmap_html(html: str) -> Dict[str, List[str]]:
+    """
+    researchmap ページから J-GLOBAL と似た4項目をできるだけ抽出する。
+    """
+    return extract_topics_and_papers_from_html(html)
+
+
 def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
     """
-    TRIOS と同じ流れに寄せる:
-    1. サイト内検索で候補一覧を取る
-    2. 候補 URL を抽出する
-    3. choose_best() で最も名前が近い候補を選ぶ
-    4. 失敗時のみ外部検索で補助
+    優先順:
+    1. J-GLOBAL サイト内検索
+    2. DuckDuckGo / Bing
+    3. researchmap で人を見つけて J-GLOBAL URL を補完
     """
-    norm = normalize_name(name)
-    direct_url = KNOWN_JGLOBAL_URLS.get(norm)
-    if direct_url:
-        return [{
-            "display_name": normalize_text(name),
-            "url": direct_url,
-        }]
-
     session = _build_session()
 
-    # TRIOS の search_candidates() と同様に、
-    # 「検索ページを叩いて一覧のリンクを拾う」やり方を使う
     search_templates = [
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "q"),
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "keyword"),
@@ -623,7 +704,6 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
     if candidates:
         return candidates
 
-    # サイト内検索で候補が取れなかったときだけ補助検索
     candidates = _search_jglobal_via_duckduckgo(name)
     if candidates:
         return candidates
@@ -632,7 +712,33 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
     if candidates:
         return candidates
 
-    return []
+    researchmap_candidates = _search_researchmap_candidates(name)
+    if not researchmap_candidates:
+        return []
+
+    best_rm = choose_best(name, researchmap_candidates)
+    ordered_rm = [best_rm] + [c for c in researchmap_candidates if c is not best_rm] if best_rm else researchmap_candidates
+
+    bridged: List[Dict[str, str]] = []
+    seen = set()
+
+    for cand in ordered_rm[:5]:
+        try:
+            html = fetch(cand["url"], session=session)
+        except Exception:
+            continue
+        jglobal_url = _extract_jglobal_url_from_researchmap_profile(html)
+        if not jglobal_url:
+            continue
+        if jglobal_url in seen:
+            continue
+        seen.add(jglobal_url)
+        bridged.append({
+            "display_name": cand.get("display_name", ""),
+            "url": jglobal_url,
+        })
+
+    return bridged
 
 
 def _fetch_profile_from_candidates(
@@ -706,40 +812,58 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_key = slugify(name)
+    session = _build_session()
 
     try:
-        norm = normalize_name(name)
-        direct_url = KNOWN_JGLOBAL_URLS.get(norm)
-        if direct_url:
+        candidates = search_jglobal_candidates(name)
+        if candidates:
+            best = choose_best(name, candidates)
+            ordered_candidates = [best] + [c for c in candidates if c is not best] if best else candidates
             result = _fetch_profile_from_candidates(
                 name=name,
-                candidates=[{
-                    "display_name": normalize_text(name),
-                    "url": direct_url,
-                }],
+                candidates=ordered_candidates,
                 cache_dir=cache_dir,
                 cache_key=cache_key,
                 source="jglobal",
             )
             if _has_profile_data(result):
-                result["status"] = "ok_jglobal_direct"
-                result["matched_url"] = direct_url
                 return result
 
-        candidates = search_jglobal_candidates(name)
-        if not candidates:
+        # 最後の保険: researchmap の内容自体を使う
+        rm_candidates = _search_researchmap_candidates(name)
+        if not rm_candidates:
             return _empty_result("jglobal_not_found", source="jglobal")
 
-        best = choose_best(name, candidates)
-        ordered_candidates = [best] + [c for c in candidates if c is not best] if best else candidates
+        best_rm = choose_best(name, rm_candidates)
+        ordered_rm = [best_rm] + [c for c in rm_candidates if c is not best_rm] if best_rm else rm_candidates
 
-        return _fetch_profile_from_candidates(
-            name=name,
-            candidates=ordered_candidates,
-            cache_dir=cache_dir,
-            cache_key=cache_key,
-            source="jglobal",
-        )
+        for idx, cand in enumerate(ordered_rm[:5], start=1):
+            try:
+                response = fetch_response(cand["url"], session=session)
+                html = response.text
+                cache_path = cache_dir / f"{cache_key}__researchmap_{idx}.html"
+                cache_path.write_text(html, encoding="utf-8")
+            except Exception:
+                continue
+
+            parsed = _extract_profile_from_researchmap_html(html)
+            if not _has_profile_data(parsed):
+                continue
+
+            jglobal_url = _extract_jglobal_url_from_researchmap_profile(html)
+            return {
+                "status": "ok_researchmap_fallback",
+                "matched_url": normalize_text(jglobal_url),
+                "matched_display_name": normalize_text(cand.get("display_name", "")),
+                "profile_source": "researchmap",
+                "research_topics": parsed.get("research_topics", []),
+                "research_fields": parsed.get("research_fields", []),
+                "research_keywords": parsed.get("research_keywords", []),
+                "papers": parsed.get("papers", []),
+            }
+
+        return _empty_result("jglobal_not_found", source="jglobal")
+
     except Exception as exc:
         return _empty_result("jglobal_error", error=str(exc), source="jglobal")
 
