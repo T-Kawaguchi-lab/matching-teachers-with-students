@@ -87,14 +87,17 @@ STOP_SECTION_PATTERNS: List[str] = [
 ]
 
 TRIOS_LINK_PATTERNS = [r"/researcher/\d{6,}", r"/researchers/\d{6,}"]
-JGLOBAL_LINK_PATTERNS = [r"/detail\?JGLOBAL_ID=", r"https://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID="]
+JGLOBAL_LINK_PATTERNS = [
+    r"/detail\?JGLOBAL_ID=",
+    r"https://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=",
+]
 
-# 既知の J-GLOBAL 直リンク
-# 検索で拾えない人はここに追加すれば、直接取得できます
-KNOWN_JGLOBAL_URLS: Dict[str, str] = {
-    normalize_name("大西 正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
-    normalize_name("大西正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
-}
+# 必要ならここに固定URLを置けますが、今回は確認のため無効化しておきます
+# KNOWN_JGLOBAL_URLS: Dict[str, str] = {
+#     normalize_name("大西 正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
+#     normalize_name("大西正輝"): "https://jglobal.jst.go.jp/detail?JGLOBAL_ID=200901029857148130",
+# }
+KNOWN_JGLOBAL_URLS: Dict[str, str] = {}
 
 
 def _build_session() -> requests.Session:
@@ -370,10 +373,12 @@ def _extract_candidate_links(
     for link in soup.select("a[href]"):
         href = normalize_text(link.get("href"))
         label = normalize_text(link.get_text(" ", strip=True))
+
         if href.startswith("/l/?") and "uddg=" in href:
             href = urllib.parse.unquote(href.split("uddg=", 1)[1])
         elif "uddg=" in href and href.startswith("https://duckduckgo.com/l/?"):
             href = urllib.parse.unquote(href.split("uddg=", 1)[1])
+
         add_candidate(href, label)
 
     if any("JGLOBAL_ID" in p for p in link_patterns):
@@ -382,6 +387,7 @@ def _extract_candidate_links(
             html,
         ):
             add_candidate(matched)
+
         for matched_id in re.findall(r"JGLOBAL_ID=[^\s\"'&<>]+", html):
             add_candidate(f"{base_url}/detail?{matched_id}")
 
@@ -408,14 +414,21 @@ def _search_candidates_by_templates(
                 html = fetch(search_url, params={param_name: query}, session=session)
             except Exception:
                 continue
-            candidates = _extract_candidate_links(html, base_url=base_url, link_patterns=link_patterns)
+
+            candidates = _extract_candidate_links(
+                html,
+                base_url=base_url,
+                link_patterns=link_patterns,
+            )
             if candidates:
                 return candidates
+
     return []
 
 
 def search_candidates(base_url: str, name: str, per: int = 50) -> List[Dict[str, str]]:
     session = _build_session()
+
     search_templates = [
         (f"{base_url}/ja/researchers", "q"),
         (f"{base_url}/ja/researchers", "keyword"),
@@ -440,6 +453,7 @@ def choose_best(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[st
     target = normalize_name(name)
     best: Optional[Dict[str, str]] = None
     best_score = -1
+
     for row in candidates:
         label = normalize_name(row.get("display_name"))
         score = 0
@@ -449,9 +463,11 @@ def choose_best(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[st
             score = 80
         elif target in label or label in target:
             score = 60
+
         if score > best_score:
             best = row
             best_score = score
+
     return best or (candidates[0] if candidates else None)
 
 
@@ -531,6 +547,7 @@ def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
             html = fetch("https://duckduckgo.com/html/", params={"q": query}, session=session)
         except Exception:
             continue
+
         candidates = _extract_candidate_links(
             html,
             base_url=DEFAULT_JGLOBAL_BASE_URL,
@@ -538,6 +555,7 @@ def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
         )
         if candidates:
             return candidates
+
     return []
 
 
@@ -554,6 +572,7 @@ def _search_jglobal_via_bing(name: str) -> List[Dict[str, str]]:
             html = fetch("https://www.bing.com/search", params={"q": query}, session=session)
         except Exception:
             continue
+
         candidates = _extract_candidate_links(
             html,
             base_url=DEFAULT_JGLOBAL_BASE_URL,
@@ -561,11 +580,18 @@ def _search_jglobal_via_bing(name: str) -> List[Dict[str, str]]:
         )
         if candidates:
             return candidates
+
     return []
 
 
 def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
-    # まず既知URLを最優先
+    """
+    TRIOS と同じ流れに寄せる:
+    1. サイト内検索で候補一覧を取る
+    2. 候補 URL を抽出する
+    3. choose_best() で最も名前が近い候補を選ぶ
+    4. 失敗時のみ外部検索で補助
+    """
     norm = normalize_name(name)
     direct_url = KNOWN_JGLOBAL_URLS.get(norm)
     if direct_url:
@@ -575,6 +601,9 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
         }]
 
     session = _build_session()
+
+    # TRIOS の search_candidates() と同様に、
+    # 「検索ページを叩いて一覧のリンクを拾う」やり方を使う
     search_templates = [
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "q"),
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search/researchers", "keyword"),
@@ -594,6 +623,7 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
     if candidates:
         return candidates
 
+    # サイト内検索で候補が取れなかったときだけ補助検索
     candidates = _search_jglobal_via_duckduckgo(name)
     if candidates:
         return candidates
@@ -678,7 +708,6 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
     cache_key = slugify(name)
 
     try:
-        # 既知URLなら直接ここで取得
         norm = normalize_name(name)
         direct_url = KNOWN_JGLOBAL_URLS.get(norm)
         if direct_url:
@@ -701,14 +730,16 @@ def enrich_teacher_from_jglobal(name: str, cache_dir: str | Path) -> Dict[str, o
         if not candidates:
             return _empty_result("jglobal_not_found", source="jglobal")
 
-        result = _fetch_profile_from_candidates(
+        best = choose_best(name, candidates)
+        ordered_candidates = [best] + [c for c in candidates if c is not best] if best else candidates
+
+        return _fetch_profile_from_candidates(
             name=name,
-            candidates=candidates,
+            candidates=ordered_candidates,
             cache_dir=cache_dir,
             cache_key=cache_key,
             source="jglobal",
         )
-        return result
     except Exception as exc:
         return _empty_result("jglobal_error", error=str(exc), source="jglobal")
 
