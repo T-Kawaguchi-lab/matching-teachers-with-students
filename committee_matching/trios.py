@@ -1,5 +1,9 @@
+# committee_matching/trios.py
+# 下の内容で丸ごと置き換えてください
+
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -34,10 +38,27 @@ CONTROL_LINES = {
 }
 
 SECTION_PATTERNS: Dict[str, List[str]] = {
-    "research_fields": [r"研究分野", r"Research field", r"Research fields"],
-    "research_keywords": [r"研究キーワード", r"keyword", r"Research keywords"],
-    "research_topics": [r"研究課題", r"競争的資金等の研究課題", r"Research projects"],
-    "papers": [r"論文", r"Refereed academic journal/Refereed international conference paper"],
+    "research_fields": [
+        r"研究分野",
+        r"Research field",
+        r"Research fields",
+    ],
+    "research_keywords": [
+        r"研究キーワード",
+        r"keyword",
+        r"Research keywords",
+    ],
+    "research_topics": [
+        r"研究課題",
+        r"競争的資金等の研究課題",
+        r"共同研究・競争的資金等の研究課題",
+        r"Research projects",
+    ],
+    "papers": [
+        r"論文",
+        r"Refereed academic journal/Refereed international conference paper",
+        r"Misc",
+    ],
 }
 STOP_SECTION_PATTERNS: List[str] = [
     r"研究分野",
@@ -47,6 +68,7 @@ STOP_SECTION_PATTERNS: List[str] = [
     r"Research keywords",
     r"研究課題",
     r"競争的資金等の研究課題",
+    r"共同研究・競争的資金等の研究課題",
     r"Research projects",
     r"論文",
     r"Refereed academic journal/Refereed international conference paper",
@@ -352,10 +374,24 @@ def _extract_candidate_links(
         add_candidate(href, label)
 
     if any("JGLOBAL_ID" in p for p in link_patterns):
-        for matched in re.findall(r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[^\s\"'&<>]+(?:&[^\s\"'<>]*)?", html):
+        for matched in re.findall(
+            r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[^\s\"'&<>]+(?:&[^\s\"'<>]*)?",
+            html,
+        ):
             add_candidate(matched)
         for matched_id in re.findall(r"JGLOBAL_ID=[^\s\"'&<>]+", html):
             add_candidate(f"{base_url}/detail?{matched_id}")
+
+        # JSON-LD や script 内の URL も拾う
+        for script in soup.find_all("script"):
+            text = script.string or script.get_text(" ", strip=True) or ""
+            if "JGLOBAL_ID=" not in text:
+                continue
+            for matched in re.findall(
+                r"https?://jglobal\.jst\.go\.jp/detail\?JGLOBAL_ID=[A-Za-z0-9]+",
+                text,
+            ):
+                add_candidate(matched)
 
     return candidates
 
@@ -456,7 +492,7 @@ def _parse_jglobal_display_name(html: str) -> str:
     lines = _plain_text_lines(html)
     for idx, line in enumerate(lines):
         if "J-GLOBAL ID" in line:
-            for nxt in lines[idx + 1: idx + 6]:
+            for nxt in lines[idx + 1: idx + 8]:
                 if not nxt:
                     continue
                 if _looks_like_section_start(nxt):
@@ -503,10 +539,97 @@ def _search_jglobal_via_duckduckgo(name: str) -> List[Dict[str, str]]:
             html = fetch("https://duckduckgo.com/html/", params={"q": query}, session=session)
         except Exception:
             continue
-        candidates = _extract_candidate_links(html, base_url=DEFAULT_JGLOBAL_BASE_URL, link_patterns=JGLOBAL_LINK_PATTERNS)
+        candidates = _extract_candidate_links(
+            html,
+            base_url=DEFAULT_JGLOBAL_BASE_URL,
+            link_patterns=JGLOBAL_LINK_PATTERNS,
+        )
         if candidates:
             return candidates
     return []
+
+
+def _search_jglobal_via_bing(name: str) -> List[Dict[str, str]]:
+    session = _build_session()
+    queries = [
+        f'site:jglobal.jst.go.jp/detail?JGLOBAL_ID= "{normalize_text(name)}"',
+        f'site:jglobal.jst.go.jp/detail?JGLOBAL_ID= "{normalize_text(name).replace(" ", "")}"',
+        f'jglobal "{normalize_text(name)}"',
+    ]
+
+    for query in queries:
+        try:
+            html = fetch("https://www.bing.com/search", params={"q": query}, session=session)
+        except Exception:
+            continue
+        candidates = _extract_candidate_links(
+            html,
+            base_url=DEFAULT_JGLOBAL_BASE_URL,
+            link_patterns=JGLOBAL_LINK_PATTERNS,
+        )
+        if candidates:
+            return candidates
+    return []
+
+
+def _search_jglobal_via_researchmap(name: str) -> List[Dict[str, str]]:
+    """
+    researchmap は J-GLOBAL と同じ JST 系列データに強く、
+    GitHub Actions 上で DuckDuckGo が取りこぼすケースの保険。
+    researchmap の検索結果や個人ページ HTML 内にある J-GLOBAL detail URL を拾う。
+    """
+    session = _build_session()
+    query_variants = unique_keep_order([
+        normalize_text(name),
+        normalize_text(name).replace(" ", ""),
+    ])
+
+    urls = [
+        "https://researchmap.jp/researchers",
+        "https://researchmap.jp/search",
+    ]
+
+    for q in query_variants:
+        for url in urls:
+            for key in ["q", "keyword", "search"]:
+                try:
+                    html = fetch(url, params={key: q}, session=session)
+                except Exception:
+                    continue
+                candidates = _extract_candidate_links(
+                    html,
+                    base_url=DEFAULT_JGLOBAL_BASE_URL,
+                    link_patterns=JGLOBAL_LINK_PATTERNS,
+                )
+                if candidates:
+                    return candidates
+
+    return []
+
+
+def _search_jglobal_via_direct_detail_guess(name: str) -> List[Dict[str, str]]:
+    """
+    最後の最後の保険。
+    大西正輝のように検索導線で落ちても、外部検索結果や既知の detail URL 断片が
+    HTML/ログ/キャッシュに残っている場合があるので、
+    名前を使った一般検索エンジン結果から detail URL を総当たりで拾う。
+    """
+    candidates: List[Dict[str, str]] = []
+    seen = set()
+
+    for finder in (_search_jglobal_via_duckduckgo, _search_jglobal_via_bing, _search_jglobal_via_researchmap):
+        try:
+            rows = finder(name)
+        except Exception:
+            rows = []
+        for row in rows:
+            url = normalize_text(row.get("url"))
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            candidates.append(row)
+
+    return candidates
 
 
 def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
@@ -519,6 +642,8 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "q"),
         (f"{DEFAULT_JGLOBAL_BASE_URL}/search", "keyword"),
     ]
+
+    # 1. まず J-GLOBAL サイト内検索
     candidates = _search_candidates_by_templates(
         base_url=DEFAULT_JGLOBAL_BASE_URL,
         name=name,
@@ -528,7 +653,24 @@ def search_jglobal_candidates(name: str) -> List[Dict[str, str]]:
     )
     if candidates:
         return candidates
-    return _search_jglobal_via_duckduckgo(name)
+
+    # 2. DuckDuckGo
+    candidates = _search_jglobal_via_duckduckgo(name)
+    if candidates:
+        return candidates
+
+    # 3. Bing
+    candidates = _search_jglobal_via_bing(name)
+    if candidates:
+        return candidates
+
+    # 4. researchmap 経由
+    candidates = _search_jglobal_via_researchmap(name)
+    if candidates:
+        return candidates
+
+    # 5. まとめて総当たり
+    return _search_jglobal_via_direct_detail_guess(name)
 
 
 def _fetch_profile_from_candidates(
@@ -583,6 +725,7 @@ def _fetch_profile_from_candidates(
 
         if _has_profile_data(result) and score >= 100:
             return result
+
         if _has_profile_data(result) and score > best_score:
             best_nonempty = result
             best_score = score

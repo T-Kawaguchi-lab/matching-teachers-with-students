@@ -58,6 +58,10 @@ def update_master_title_file(root_dir: Path, append_path: str | Path | None = No
     return master_path
 
 
+# committee_matching/pipeline.py
+# これは前回版のままでよいですが、missing_teachers の中身確認をしやすくするため
+# 下の build_trios_lookup だけ置き換えてください
+
 def build_trios_lookup(teachers_df: pd.DataFrame, root_dir: Path) -> Dict[str, Dict[str, object]]:
     cfg = get_config()
     lookup: Dict[str, Dict[str, object]] = {}
@@ -74,6 +78,10 @@ def build_trios_lookup(teachers_df: pd.DataFrame, root_dir: Path) -> Dict[str, D
             trios_url="",
         )
         result.setdefault("teacher_name", str(name))
+        if "matched_display_name" not in result:
+            result["matched_display_name"] = ""
+        if "tried_candidates" not in result:
+            result["tried_candidates"] = ""
         lookup[norm] = result
 
     return lookup
