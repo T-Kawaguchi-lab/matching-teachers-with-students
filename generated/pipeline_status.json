@@ -1,18 +1,18 @@
 {
-  "updated_at": "2026-04-12T12:11:04",
+  "updated_at": "2026-04-12T12:29:46",
   "teacher_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/teachers_latest.xlsx",
-    "modified_at": "2026-04-12T12:07:14",
+    "modified_at": "2026-04-12T12:24:56",
     "size_bytes": 11654
   },
   "student_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/students_latest.xlsx",
-    "modified_at": "2026-04-12T12:07:14",
+    "modified_at": "2026-04-12T12:24:56",
     "size_bytes": 14627
   },
   "master_title_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/data_sources/master_title.xlsx",
-    "modified_at": "2026-04-12T12:07:14",
+    "modified_at": "2026-04-12T12:24:55",
     "size_bytes": 41454
   },
   "students_count": 104,
