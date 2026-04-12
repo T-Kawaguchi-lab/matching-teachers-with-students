@@ -281,6 +281,10 @@ def build_teacher_to_student_table(df: pd.DataFrame, selected_teacher: str) -> p
     return display_df
 
 
+def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+
 def main() -> None:
     st.set_page_config(page_title="MPPS / MSE 類似度マッチング", layout="wide")
 
@@ -433,6 +437,10 @@ def main() -> None:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("類似度計算結果")
 
+        current_display_df = pd.DataFrame()
+        current_selected_name = ""
+        current_selected_kind = ""
+
         if not scores_df.empty:
             weighted_scores_df = recompute_weighted_scores(
                 scores_df,
@@ -461,6 +469,9 @@ def main() -> None:
                     )
 
                     display_df = build_student_to_teacher_table(weighted_scores_df, selected_student)
+                    current_display_df = display_df.copy()
+                    current_selected_name = str(selected_student)
+                    current_selected_kind = "student"
 
                     st.dataframe(
                         display_df,
@@ -484,6 +495,9 @@ def main() -> None:
                     )
 
                     display_df = build_teacher_to_student_table(weighted_scores_df, selected_teacher)
+                    current_display_df = display_df.copy()
+                    current_selected_name = str(selected_teacher)
+                    current_selected_kind = "teacher"
 
                     st.dataframe(
                         display_df,
@@ -494,6 +508,7 @@ def main() -> None:
                 else:
                     st.info("表示できる教員がいません。")
         else:
+            weighted_scores_df = pd.DataFrame()
             st.info("まだ類似度計算結果がありません。")
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -525,27 +540,30 @@ def main() -> None:
 
         col1, col2 = st.columns(2)
 
-        if SCORES_CSV.exists():
+        if not weighted_scores_df.empty:
+            all_csv_bytes = dataframe_to_csv_bytes(weighted_scores_df)
             col1.download_button(
-                "student_teacher_scores_long.csv",
-                SCORES_CSV.read_bytes(),
-                file_name=SCORES_CSV.name,
+                f"{selected_group} 全件ダウンロード",
+                all_csv_bytes,
+                file_name=f"{selected_group}_weighted_scores_all.csv",
                 mime="text/csv",
                 width="stretch",
             )
 
-        if not scores_df.empty:
-            weighted_export_df = recompute_weighted_scores(
-                scores_df,
-                field_weight=field_weight,
-                content_weight=content_weight,
-                per_match_bonus=0.005,
-            )
-            csv_bytes = weighted_export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        if not current_display_df.empty and current_selected_name:
+            single_csv_bytes = dataframe_to_csv_bytes(current_display_df)
+
+            if current_selected_kind == "student":
+                button_label = f"{current_selected_name} ダウンロード"
+                file_name = f"{selected_group}_{current_selected_name}_teachers_ranking.csv"
+            else:
+                button_label = f"{current_selected_name} ダウンロード"
+                file_name = f"{selected_group}_{current_selected_name}_students_ranking.csv"
+
             col2.download_button(
-                "重み反映後CSVをダウンロード",
-                csv_bytes,
-                file_name=f"weighted_scores_{selected_group}.csv",
+                button_label,
+                single_csv_bytes,
+                file_name=file_name,
                 mime="text/csv",
                 width="stretch",
             )
