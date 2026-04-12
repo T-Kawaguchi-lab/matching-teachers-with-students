@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -43,15 +43,20 @@ KEYWORD_RULES: List[Tuple[str, List[str], List[str]]] = [
     ("GIS・空間分析", ["地理空間", "居住パターン", "地籍", "23区", "空港", "洪水", "地図", "空間"], ["GIS", "空間計量", "地理情報分析", "立地分析"]),
     ("社会政策・福祉", ["介護", "産後", "福祉", "NPO", "アウトリーチ", "居場所", "コミュニティ"], ["社会福祉政策", "地域福祉", "子育て支援", "非営利組織論"]),
     ("オペレーションズリサーチ", ["最適化", "輸送", "スケジューリング", "負荷分散", "運行計画", "経路最適化", "工場", "multi", "マルチファクトリー"], ["数理最適化", "組合せ最適化", "オペレーションズリサーチ", "計画・スケジューリング"]),
-    ("交通・モビリティ", ["電動バス", "ライドシェア", "道路", "歩車", "歩行者", "交通", "飛行経路"], ["交通工学", "モビリティ設計", "交通需要分析", "ネットワーク設計"]),
-    ("建築・空間設計", ["間取り", "住宅", "歩車共存空間", "建築", "空間"], ["建築計画", "空間レイアウト生成", "居住空間設計", "都市空間デザイン"]),
+    ("交通・モビリティ", ["電動バス", "ライドシェア", "道路", "歩車", "歩行者", "交通", "飛行経路", "シェアサイクル", "自転車", "水素ステーション", "FCV"], ["交通工学", "モビリティ設計", "交通需要分析", "ネットワーク設計"]),
+    ("建築・空間設計", ["間取り", "住宅", "歩車共存空間", "建築", "空間", "舞台", "スタジアム", "アリーナ"], ["建築計画", "空間レイアウト生成", "居住空間設計", "都市空間デザイン"]),
     ("機械学習", ["機械学習", "アクティブラーニング", "factorization", "sparse", "スパース", "モデリング", "センチメント", "行動認識", "マルチモーダル", "異常"], ["機械学習", "統計的学習", "予測モデリング", "表現学習"]),
-    ("画像・視覚情報処理", ["画像", "視線", "骨格", "関節角", "認識", "生体計測", "vision", "異常原因"], ["コンピュータビジョン", "画像認識", "行動認識", "マルチモーダル解析"]),
+    ("画像・視覚情報処理", ["画像", "視線", "骨格", "関節角", "認識", "生体計測", "vision", "異常原因", "衛星", "リモートセンシング"], ["コンピュータビジョン", "画像認識", "行動認識", "マルチモーダル解析"]),
     ("ネットワーク・グラフ理論", ["グラフ", "コイン", "部分彩色", "連結性", "ネットワーク"], ["グラフ理論", "離散数学", "ネットワーク最適化", "組合せ構造"]),
     ("サービス・待ち行列", ["サーバ", "サービスシステム", "待ち行列", "性能解析"], ["待ち行列理論", "サービス工学", "システム性能評価"]),
-    ("スポーツデータ分析", ["eスポーツ", "スポーツ", "チーム", "プレイスタイル"], ["スポーツアナリティクス", "戦術分析", "パフォーマンス分析"]),
-    ("災害・防災研究", ["震災", "災害", "洪水", "記憶", "防災"], ["災害社会学", "防災政策", "リスク評価"]),
+    ("スポーツデータ分析", ["eスポーツ", "スポーツ", "チーム", "プレイスタイル", "スタジアム", "アリーナ"], ["スポーツアナリティクス", "戦術分析", "パフォーマンス分析"]),
+    ("災害・防災研究", ["震災", "災害", "洪水", "記憶", "防災", "犯罪被害", "騒音"], ["災害社会学", "防災政策", "リスク評価"]),
     ("政策評価・計量分析", ["計量", "因果推論", "政策分析", "影響", "効果", "推移", "実証", "要請"], ["政策評価", "計量経済学", "統計的因果推論", "実証分析"]),
+    ("会計・ファイナンス", ["会計", "仕訳", "財務", "監査"], ["会計データ分析", "財務会計", "管理会計", "会計情報システム"]),
+    ("テキスト分析・NLP", ["テキスト", "言語", "SNS", "意見", "感情", "ワクチン"], ["テキストマイニング", "自然言語処理", "感情分析", "社会データ分析"]),
+    ("医療・ヘルスデータ", ["医療", "生体", "ハザード比", "HPV", "ワクチン", "ヘルス"], ["医療データ分析", "生体情報解析", "ヘルスデータサイエンス", "統計解析"]),
+    ("観光・マーケティング", ["観光", "セグメンテーション", "マーケティング", "需要"], ["観光データ分析", "マーケティング分析", "クラスタリング", "需要予測"]),
+    ("環境・エネルギー", ["環境", "排出", "エネルギー", "グリーン", "気候", "CO2", "水素"], ["環境政策", "エネルギーシステム", "脱炭素分析", "持続可能性評価"]),
 ]
 
 
@@ -84,6 +89,24 @@ def infer_research_fields_from_texts(texts: Iterable[object], include_coarse: bo
                 coarse.append(coarse_name)
 
     return unique_keep_order(coarse), unique_keep_order(fine)
+
+
+def _suggest_taxonomy_fields(field_matcher, texts: Iterable[object], top_k: int = 4) -> List[str]:
+    if field_matcher is None:
+        return []
+    normalized_texts = [normalize_text(t) for t in texts if normalize_text(t)]
+    if not normalized_texts:
+        return []
+    try:
+        return field_matcher.suggest_fields(
+            normalized_texts,
+            top_k=top_k,
+            min_score=0.18,
+            additional_min_score=0.16,
+            relative_score_floor=0.82,
+        )
+    except Exception:
+        return []
 
 
 def load_master_title(path: str | Path) -> pd.DataFrame:
@@ -125,7 +148,7 @@ class PreparedData:
     master_title: pd.DataFrame
 
 
-def prepare_students(df: pd.DataFrame) -> pd.DataFrame:
+def prepare_students(df: pd.DataFrame, field_matcher=None) -> pd.DataFrame:
     rename_map = {"名前": "student_name", "タイトル": "title", "所属": "group", "概要分野": "overview_field", "研究内容": "research_content", "研究分野": "research_field"}
     out = df.rename(columns=rename_map).copy()
     required = ["student_name", "title", "group"]
@@ -142,16 +165,31 @@ def prepare_students(df: pd.DataFrame) -> pd.DataFrame:
         content = normalize_text(row.get("research_content"))
         overview_fields = split_multi_value_text(row.get("overview_field"))
         base_fields = split_multi_value_text(row.get("research_field"))
-        coarse, detailed = infer_research_fields_from_texts([title, content, row.get("overview_field"), row.get("research_field")], include_coarse=False)
+        coarse, detailed = infer_research_fields_from_texts(
+            [title, content, row.get("overview_field"), row.get("research_field")],
+            include_coarse=False,
+        )
+        taxonomy_fields = _suggest_taxonomy_fields(
+            field_matcher,
+            [title, content, row.get("overview_field"), row.get("research_field")],
+            top_k=3,
+        )
+
+        research_fields = unique_keep_order((base_fields if base_fields else overview_fields) + coarse)
+        detailed_fields = unique_keep_order(detailed + taxonomy_fields)
+        if not detailed_fields:
+            detailed_fields = unique_keep_order(base_fields + overview_fields)
+        field_text_values = unique_keep_order(overview_fields + research_fields + detailed_fields)
+
         rows.append({
             "student_name": normalize_text(row.get("student_name")),
             "group": normalize_text(row.get("group")).upper(),
             "title": title,
             "overview_field": " ; ".join(overview_fields),
             "research_content": content,
-            "research_field": " ; ".join(unique_keep_order(base_fields + coarse)),
-            "detailed_research_field": " ; ".join(detailed),
-            "field_text": "\n".join(unique_keep_order(overview_fields + base_fields + coarse + detailed)),
+            "research_field": " ; ".join(research_fields),
+            "detailed_research_field": " ; ".join(detailed_fields),
+            "field_text": "\n".join(field_text_values),
             "content_text": "\n".join([v for v in [title, content] if v]),
         })
     result = pd.DataFrame(rows)
@@ -159,7 +197,12 @@ def prepare_students(df: pd.DataFrame) -> pd.DataFrame:
     return result.reset_index(drop=True)
 
 
-def prepare_teachers(df: pd.DataFrame, master_title_df: pd.DataFrame, trios_lookup: Dict[str, Dict[str, object]] | None = None) -> pd.DataFrame:
+def prepare_teachers(
+    df: pd.DataFrame,
+    master_title_df: pd.DataFrame,
+    trios_lookup: Dict[str, Dict[str, object]] | None = None,
+    field_matcher=None,
+) -> pd.DataFrame:
     trios_lookup = trios_lookup or {}
     rename_map = {"指導教員": "teacher_name", "所属": "group_text", "No.": "no"}
     out = df.rename(columns=rename_map).copy()
@@ -180,11 +223,32 @@ def prepare_teachers(df: pd.DataFrame, master_title_df: pd.DataFrame, trios_look
         if not groups:
             continue
         trios = trios_lookup.get(normalize_name(teacher_name), {})
-        trios_topics = trios.get("research_topics", []) or []
-        trios_papers = trios.get("papers", []) or []
-        trios_text = "\n".join(unique_keep_order([*trios_topics, *trios_papers]))
+        trios_topics = unique_keep_order(trios.get("research_topics", []) or [])
+        trios_research_fields = unique_keep_order(trios.get("research_fields", []) or [])
+        trios_research_keywords = unique_keep_order(trios.get("research_keywords", []) or [])
+        trios_papers = unique_keep_order(trios.get("papers", []) or [])
+        trios_info_values = unique_keep_order([
+            *trios_topics,
+            *trios_research_fields,
+            *trios_research_keywords,
+            *trios_papers,
+        ])
         titles = unique_keep_order(history_by_teacher.get(normalize_name(teacher_name), []))
-        coarse_fields, detailed_fields = infer_research_fields_from_texts([trios_text, *titles], include_coarse=True)
+
+        field_source_texts = [*trios_topics, *trios_research_fields]
+        coarse_fields, detailed_fields = infer_research_fields_from_texts(field_source_texts, include_coarse=True)
+        taxonomy_fields = _suggest_taxonomy_fields(field_matcher, field_source_texts, top_k=4)
+
+        coarse_fields = unique_keep_order(trios_research_fields + coarse_fields)
+        detailed_fields = unique_keep_order(detailed_fields + taxonomy_fields)
+        if not detailed_fields:
+            detailed_fields = unique_keep_order(trios_research_fields + trios_research_keywords)
+
+        field_text_values = unique_keep_order(
+            trios_research_fields + trios_research_keywords + coarse_fields + detailed_fields
+        )
+        content_text_values = unique_keep_order(titles + trios_topics + trios_papers)
+
         for group in groups:
             rows.append({
                 "teacher_name": teacher_name,
@@ -192,14 +256,16 @@ def prepare_teachers(df: pd.DataFrame, master_title_df: pd.DataFrame, trios_look
                 "group_text": normalize_text(row.get("group_text")),
                 "trios_url": normalize_text(trios.get("matched_url", "")),
                 "trios_status": normalize_text(trios.get("status", "")),
-                "trios_info": trios_text,
+                "trios_info": "\n".join(trios_info_values),
                 "trios_topics_text": " / ".join(trios_topics),
+                "trios_research_fields_text": " / ".join(trios_research_fields),
+                "trios_research_keywords_text": " / ".join(trios_research_keywords),
                 "trios_papers_text": " / ".join(trios_papers),
                 "master_title_text": " / ".join(titles),
                 "coarse_research_field": " ; ".join(coarse_fields),
                 "detailed_research_field": " ; ".join(detailed_fields),
-                "field_text": "\n".join(unique_keep_order(coarse_fields + detailed_fields)),
-                "content_text": "\n".join([v for v in [" / ".join(titles), trios_text] if v]),
+                "field_text": "\n".join(field_text_values),
+                "content_text": "\n".join(content_text_values),
             })
     result = pd.DataFrame(rows)
     return result.reset_index(drop=True)

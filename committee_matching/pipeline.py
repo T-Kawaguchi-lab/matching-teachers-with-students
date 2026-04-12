@@ -9,6 +9,7 @@ import pandas as pd
 
 from .config import get_config
 from .excel_io import ensure_input_files, load_generic_table, load_student_excel, load_teacher_excel
+from .field_assignment import FieldTaxonomyMatcher
 from .models import load_embedding_model
 from .mpps_mse_processing import GROUPS, load_master_title, merge_master_title, prepare_students, prepare_teachers
 from .similarity import compute_similarity, top_matches_for_group
@@ -104,10 +105,15 @@ def run_pipeline(
 
     master_df = load_master_title(history_file)
     trios_lookup = build_trios_lookup(teachers_raw, root)
-    students = prepare_students(students_raw)
-    teachers = prepare_teachers(teachers_raw, master_df, trios_lookup)
 
     model = load_embedding_model(str(cfg["embedding_model"]))
+    try:
+        field_matcher = FieldTaxonomyMatcher(model)
+    except Exception:
+        field_matcher = None
+
+    students = prepare_students(students_raw, field_matcher=field_matcher)
+    teachers = prepare_teachers(teachers_raw, master_df, trios_lookup, field_matcher=field_matcher)
     generated_dir = root / str(cfg["generated_dir"])
     generated_dir.mkdir(parents=True, exist_ok=True)
 

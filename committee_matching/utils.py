@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
+
+
+_EMPTY_TEXT_MARKERS = {'', 'nan', 'none', 'null', 'nat', '<na>'}
 
 
 def load_json(path: str | Path) -> Dict[str, Any]:
@@ -19,7 +23,11 @@ def save_json(path: str | Path, payload: Dict[str, Any]) -> None:
 def normalize_text(value: Any) -> str:
     if value is None:
         return ''
+    if isinstance(value, float) and math.isnan(value):
+        return ''
     text = str(value).strip()
+    if text.lower() in _EMPTY_TEXT_MARKERS:
+        return ''
     text = text.replace('\u3000', ' ')
     text = re.sub(r'\s+', ' ', text)
     return text

@@ -5,12 +5,12 @@ import re
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
 
-from .utils import normalize_text, slugify
+from .utils import normalize_text, slugify, unique_keep_order
 
 
 DEFAULT_HEADERS = {
@@ -18,41 +18,107 @@ DEFAULT_HEADERS = {
 }
 
 
-def _find_dd_by_dt(soup: BeautifulSoup, dt_text: str):
-    dt = soup.find('dt', string=lambda s: s and s.strip() == dt_text)
-    if not dt:
-        return None
-    return dt.find_next_sibling('dd')
+def _iter_dt_dd_pairs(soup: BeautifulSoup) -> Iterable[Tuple[str, object]]:
+    for dt in soup.find_all('dt'):
+        dd = dt.find_next_sibling('dd')
+        if not dd:
+            continue
+        label = normalize_text(dt.get_text(' ', strip=True))
+        if not label:
+            continue
+        yield label, dd
+
+
+def _find_first_dd(soup: BeautifulSoup, patterns: Iterable[str]):
+    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
+    for label, dd in _iter_dt_dd_pairs(soup):
+        if any(p.search(label) for p in compiled):
+            return dd
+    return None
+
+
+def _find_all_dds(soup: BeautifulSoup, patterns: Iterable[str]) -> List[object]:
+    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
+    matched = []
+    for label, dd in _iter_dt_dd_pairs(soup):
+        if any(p.search(label) for p in compiled):
+            matched.append(dd)
+    return matched
+
+
+def _clean_item(text: object) -> str:
+    cleaned = normalize_text(text)
+    lowered = cleaned.lower()
+    if not cleaned:
+        return ''
+    if 'さらに表示' in cleaned or lowered == 'more...' or lowered.endswith(' more...'):
+        return ''
+    return cleaned
+
+
+def _extract_lines_from_dd(dd) -> List[str]:
+    items: List[str] = []
+
+    rows = dd.select('table tbody tr') or dd.select('table tr')
+    if rows:
+        for tr in rows:
+            tds = tr.find_all('td', recursive=False)
+            if not tds:
+                continue
+            title = _clean_item(tds[0].get_text(' ', strip=True))
+            if title:
+                items.append(title)
+        return unique_keep_order(items)
+
+    list_items = dd.select('ul > li')
+    if list_items:
+        for li in list_items:
+            bold = li.find('b')
+            if bold:
+                title = _clean_item(bold.get_text(' ', strip=True))
+            else:
+                strings = [_clean_item(s) for s in li.stripped_strings]
+                strings = [s for s in strings if s]
+                title = strings[0] if strings else ''
+            if title:
+                items.append(title)
+        return unique_keep_order(items)
+
+    for s in dd.stripped_strings:
+        item = _clean_item(s)
+        if item:
+            items.append(item)
+    return unique_keep_order(items)
 
 
 def extract_topics_and_papers_from_html(html: str) -> Dict[str, List[str]]:
     soup = BeautifulSoup(html, 'lxml')
-    topics: List[str] = []
+
+    topics_dd = _find_first_dd(soup, [r'^研究課題$', r'^Research projects?$'])
+    research_fields_dd = _find_first_dd(soup, [r'^研究分野$', r'^Research fields?$'])
+    research_keywords_dd = _find_first_dd(soup, [r'^研究キーワード$', r'^Research keywords?$'])
+
+    topics = _extract_lines_from_dd(topics_dd) if topics_dd else []
+    research_fields = _extract_lines_from_dd(research_fields_dd) if research_fields_dd else []
+    research_keywords = _extract_lines_from_dd(research_keywords_dd) if research_keywords_dd else []
+
+    paper_sections = _find_all_dds(
+        soup,
+        [
+            r'論文',
+            r'paper',
+            r'articles?',
+        ],
+    )
     papers: List[str] = []
-
-    dd_topics = _find_dd_by_dt(soup, '研究課題')
-    if dd_topics:
-        for tr in dd_topics.select('table tbody tr'):
-            tds = tr.find_all('td', recursive=False)
-            if not tds:
-                continue
-            title = tds[0].get_text(' ', strip=True)
-            if title and 'さらに表示' not in title:
-                topics.append(normalize_text(title))
-
-    dd_papers = _find_dd_by_dt(soup, '論文')
-    if dd_papers:
-        for li in dd_papers.select('ul > li'):
-            bold = li.find('b')
-            if not bold:
-                continue
-            title = bold.get_text(' ', strip=True)
-            if title and 'さらに表示' not in title:
-                papers.append(normalize_text(title))
+    for dd in paper_sections:
+        papers.extend(_extract_lines_from_dd(dd))
 
     return {
-        'research_topics': topics,
-        'papers': papers,
+        'research_topics': unique_keep_order(topics),
+        'research_fields': unique_keep_order(research_fields),
+        'research_keywords': unique_keep_order(research_keywords),
+        'papers': unique_keep_order(papers),
     }
 
 
@@ -101,6 +167,20 @@ def choose_best(name: str, candidates: List[Dict[str, str]]) -> Optional[Dict[st
     return candidates[0] if candidates else None
 
 
+def _empty_result(status: str, matched_url: str = '', error: str = '') -> Dict[str, object]:
+    payload: Dict[str, object] = {
+        'status': status,
+        'matched_url': matched_url,
+        'research_topics': [],
+        'research_fields': [],
+        'research_keywords': [],
+        'papers': [],
+    }
+    if error:
+        payload['error'] = error
+    return payload
+
+
 def enrich_teacher_from_trios(name: str, base_url: str, cache_dir: str | Path, trios_url: str = '') -> Dict[str, object]:
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -111,7 +191,7 @@ def enrich_teacher_from_trios(name: str, base_url: str, cache_dir: str | Path, t
             if cache_path.exists():
                 parsed = extract_topics_and_papers_from_html(cache_path.read_text(encoding='utf-8'))
                 return {'status': 'cache_only', 'matched_url': trios_url, **parsed}
-            return {'status': 'disabled', 'matched_url': trios_url, 'research_topics': [], 'papers': []}
+            return _empty_result('disabled', trios_url)
         if trios_url:
             html = fetch(trios_url)
             cache_path.write_text(html, encoding='utf-8')
@@ -125,7 +205,7 @@ def enrich_teacher_from_trios(name: str, base_url: str, cache_dir: str | Path, t
         candidates = search_candidates(base_url, name)
         best = choose_best(name, candidates)
         if not best:
-            return {'status': 'not_found', 'matched_url': '', 'research_topics': [], 'papers': []}
+            return _empty_result('not_found')
 
         time.sleep(0.15)
         html = fetch(best['url'])
@@ -146,10 +226,4 @@ def enrich_teacher_from_trios(name: str, base_url: str, cache_dir: str | Path, t
                 'error': str(exc),
                 **parsed,
             }
-        return {
-            'status': 'error',
-            'matched_url': trios_url,
-            'error': str(exc),
-            'research_topics': [],
-            'papers': [],
-        }
+        return _empty_result('error', trios_url, str(exc))

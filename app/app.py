@@ -75,6 +75,16 @@ def safe_read_scores_csv(path: Path) -> pd.DataFrame:
     return df
 
 
+def filter_internal_columns_for_display(df: pd.DataFrame, kind: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    hidden = {"content_text", "field_text"}
+    if kind == "teacher":
+        hidden.add("trios_info")
+    cols = [c for c in df.columns if c not in hidden]
+    return df[cols].copy()
+
+
 def run_git_push(message: str) -> str:
     if not (ROOT_DIR / ".git").exists():
         return "git リポジトリが見つかりません。"
@@ -235,7 +245,7 @@ def main() -> None:
     st.markdown('<div class="title">MPPS / MSE 類似度マッチング UI</div>', unsafe_allow_html=True)
     st.markdown(
         "タイトル・概要分野・研究内容・研究分野・細かい研究分野を使って学生側を作成し、"
-        "TRIOS情報・担当タイトル・研究分野から教員側を作成します。"
+        "TRIOS情報・TRIOS研究分野・TRIOS研究キーワード・担当タイトルから教員側を作成します。"
         "MPPS と MSE は UI 上で切り替えて確認できます。"
     )
 
@@ -424,7 +434,7 @@ def main() -> None:
             st.subheader("学生データ（加工後）")
             stu_df = get_group_df_from_excel(STUDENTS_XLSX, selected_group)
             if not stu_df.empty:
-                st.dataframe(stu_df, width="stretch", hide_index=True)
+                st.dataframe(filter_internal_columns_for_display(stu_df, "student"), width="stretch", hide_index=True)
             else:
                 st.info("学生加工データがありません。")
             st.markdown("</div>", unsafe_allow_html=True)
@@ -434,7 +444,7 @@ def main() -> None:
             st.subheader("教員データ（加工後）")
             tea_df = get_group_df_from_excel(TEACHERS_XLSX, selected_group)
             if not tea_df.empty:
-                st.dataframe(tea_df, width="stretch", hide_index=True)
+                st.dataframe(filter_internal_columns_for_display(tea_df, "teacher"), width="stretch", hide_index=True)
             else:
                 st.info("教員加工データがありません。")
             st.markdown("</div>", unsafe_allow_html=True)

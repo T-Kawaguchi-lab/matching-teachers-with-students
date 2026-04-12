@@ -74,12 +74,12 @@ def top_matches_for_group(
     students: pd.DataFrame,
     teachers: pd.DataFrame,
     similarity: SimilarityArtifacts,
-    top_k: Optional[int] = 10,
+    top_k: Optional[int] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     top_k:
       - int: 上位N件だけ詳細結果に入れる
-      - None: 全件を詳細結果に入れる
+      - None: 全件を詳細結果に入れる（全教員を出力）
     推薦結果(rec_df)は常に上位3件を使う
     """
     score_rows = []
