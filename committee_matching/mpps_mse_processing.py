@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
 
@@ -91,24 +91,6 @@ def infer_research_fields_from_texts(texts: Iterable[object], include_coarse: bo
     return unique_keep_order(coarse), unique_keep_order(fine)
 
 
-def _suggest_taxonomy_fields(field_matcher, texts: Iterable[object], top_k: int = 4) -> List[str]:
-    if field_matcher is None:
-        return []
-    normalized_texts = [normalize_text(t) for t in texts if normalize_text(t)]
-    if not normalized_texts:
-        return []
-    try:
-        return field_matcher.suggest_fields(
-            normalized_texts,
-            top_k=top_k,
-            min_score=0.18,
-            additional_min_score=0.16,
-            relative_score_floor=0.82,
-        )
-    except Exception:
-        return []
-
-
 def load_master_title(path: str | Path) -> pd.DataFrame:
     p = Path(path)
     if not p.exists():
@@ -148,7 +130,7 @@ class PreparedData:
     master_title: pd.DataFrame
 
 
-def prepare_students(df: pd.DataFrame, field_matcher=None) -> pd.DataFrame:
+def prepare_students(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {"名前": "student_name", "タイトル": "title", "所属": "group", "概要分野": "overview_field", "研究内容": "research_content", "研究分野": "research_field"}
     out = df.rename(columns=rename_map).copy()
     required = ["student_name", "title", "group"]
@@ -165,31 +147,19 @@ def prepare_students(df: pd.DataFrame, field_matcher=None) -> pd.DataFrame:
         content = normalize_text(row.get("research_content"))
         overview_fields = split_multi_value_text(row.get("overview_field"))
         base_fields = split_multi_value_text(row.get("research_field"))
-        coarse, detailed = infer_research_fields_from_texts(
-            [title, content, row.get("overview_field"), row.get("research_field")],
-            include_coarse=False,
-        )
-        taxonomy_fields = _suggest_taxonomy_fields(
-            field_matcher,
-            [title, content, row.get("overview_field"), row.get("research_field")],
-            top_k=3,
-        )
-
-        research_fields = unique_keep_order((base_fields if base_fields else overview_fields) + coarse)
-        detailed_fields = unique_keep_order(detailed + taxonomy_fields)
+        coarse, detailed = infer_research_fields_from_texts([title, content, row.get("overview_field"), row.get("research_field")], include_coarse=False)
+        detailed_fields = unique_keep_order(detailed)
         if not detailed_fields:
             detailed_fields = unique_keep_order(base_fields + overview_fields)
-        field_text_values = unique_keep_order(overview_fields + research_fields + detailed_fields)
-
         rows.append({
             "student_name": normalize_text(row.get("student_name")),
             "group": normalize_text(row.get("group")).upper(),
             "title": title,
             "overview_field": " ; ".join(overview_fields),
             "research_content": content,
-            "research_field": " ; ".join(research_fields),
+            "research_field": " ; ".join(unique_keep_order((base_fields if base_fields else overview_fields) + coarse)),
             "detailed_research_field": " ; ".join(detailed_fields),
-            "field_text": "\n".join(field_text_values),
+            "field_text": "\n".join(unique_keep_order(overview_fields + base_fields + coarse + detailed_fields)),
             "content_text": "\n".join([v for v in [title, content] if v]),
         })
     result = pd.DataFrame(rows)
@@ -197,12 +167,7 @@ def prepare_students(df: pd.DataFrame, field_matcher=None) -> pd.DataFrame:
     return result.reset_index(drop=True)
 
 
-def prepare_teachers(
-    df: pd.DataFrame,
-    master_title_df: pd.DataFrame,
-    trios_lookup: Dict[str, Dict[str, object]] | None = None,
-    field_matcher=None,
-) -> pd.DataFrame:
+def prepare_teachers(df: pd.DataFrame, master_title_df: pd.DataFrame, trios_lookup: Dict[str, Dict[str, object]] | None = None) -> pd.DataFrame:
     trios_lookup = trios_lookup or {}
     rename_map = {"指導教員": "teacher_name", "所属": "group_text", "No.": "no"}
     out = df.rename(columns=rename_map).copy()
@@ -237,12 +202,8 @@ def prepare_teachers(
 
         field_source_texts = [*profile_topics, *profile_research_fields]
         coarse_fields, detailed_fields = infer_research_fields_from_texts(field_source_texts, include_coarse=True)
-        taxonomy_fields = _suggest_taxonomy_fields(field_matcher, field_source_texts, top_k=4)
-
         coarse_fields = unique_keep_order(profile_research_fields + coarse_fields)
-        detailed_fields = unique_keep_order(detailed_fields + taxonomy_fields)
-        if not detailed_fields:
-            detailed_fields = unique_keep_order(profile_research_fields + profile_research_keywords)
+        detailed_fields = unique_keep_order(detailed_fields or (profile_research_fields + profile_research_keywords))
 
         field_text_values = unique_keep_order(
             profile_research_fields + profile_research_keywords + coarse_fields + detailed_fields
