@@ -107,13 +107,9 @@ def run_pipeline(
     trios_lookup = build_trios_lookup(teachers_raw, root)
 
     model = load_embedding_model(str(cfg["embedding_model"]))
-    try:
-        field_matcher = FieldTaxonomyMatcher(model)
-    except Exception:
-        field_matcher = None
 
-    students = prepare_students(students_raw, field_matcher=field_matcher)
-    teachers = prepare_teachers(teachers_raw, master_df, trios_lookup, field_matcher=field_matcher)
+    students = prepare_students(students_raw)
+    teachers = prepare_teachers(teachers_raw, master_df, trios_lookup)
     generated_dir = root / str(cfg["generated_dir"])
     generated_dir.mkdir(parents=True, exist_ok=True)
 
