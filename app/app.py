@@ -230,6 +230,8 @@ def build_student_to_teacher_table(df: pd.DataFrame, selected_student: str) -> p
 
     keep_cols = [
         "順位",
+        "student_name",
+        "student_id",
         "teacher_name",
         "total_score",
         "field_score",
@@ -240,6 +242,8 @@ def build_student_to_teacher_table(df: pd.DataFrame, selected_student: str) -> p
     display_df = display_df[keep_cols].copy()
     display_df = display_df.rename(
         columns={
+            "student_name": "学生名",
+            "student_id": "学籍番号",
             "teacher_name": "教員名",
             "total_score": "total_score",
             "field_score": "field_score",
@@ -259,6 +263,7 @@ def build_teacher_to_student_table(df: pd.DataFrame, selected_teacher: str) -> p
     keep_cols = [
         "順位",
         "student_name",
+        "student_id",
         "title",
         "total_score",
         "field_score",
@@ -270,6 +275,7 @@ def build_teacher_to_student_table(df: pd.DataFrame, selected_teacher: str) -> p
     display_df = display_df.rename(
         columns={
             "student_name": "学生名",
+            "student_id": "学籍番号",
             "title": "学生タイトル",
             "total_score": "total_score",
             "field_score": "field_score",

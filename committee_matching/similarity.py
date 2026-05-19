@@ -89,6 +89,9 @@ def top_matches_for_group(
     for i, student in students.reset_index(drop=True).iterrows():
         order = similarity.total_score[i].argsort()[::-1]
 
+        student_name = student["student_name"]
+        student_id = student.get("student_id", "")
+
         if top_k is None:
             selected = order
         else:
@@ -98,7 +101,8 @@ def top_matches_for_group(
             score_rows.append(
                 {
                     "group": student["group"],
-                    "student_name": student["student_name"],
+                    "student_name": student_name,
+                    "student_id": student_id,
                     "title": student["title"],
                     "teacher_name": teacher_names[int(j)],
                     "rank": rank,
@@ -119,7 +123,8 @@ def top_matches_for_group(
         recommendation_rows.append(
             {
                 "group": student["group"],
-                "student_name": student["student_name"],
+                "student_name": student_name,
+                "student_id": student_id,
                 "title": student["title"],
                 "teacher_1": top3[0],
                 "teacher_2": top3[1],

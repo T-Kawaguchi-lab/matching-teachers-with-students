@@ -129,41 +129,88 @@ class PreparedData:
     teachers: pd.DataFrame
     master_title: pd.DataFrame
 
+def normalize_student_id(value) -> str:
+    if pd.isna(value):
+        return ""
+
+    text = str(value).strip()
+
+    if text.endswith(".0"):
+        text = text[:-2]
+
+    return text
+
 
 def prepare_students(df: pd.DataFrame) -> pd.DataFrame:
-    rename_map = {"名前": "student_name", "タイトル": "title", "所属": "group", "概要分野": "overview_field", "研究内容": "research_content", "研究分野": "research_field"}
+    rename_map = {
+        "名前": "student_name",
+        "タイトル": "title",
+        "所属": "group",
+        "概要分野": "overview_field",
+        "研究内容": "research_content",
+        "研究分野": "research_field",
+        "学籍番号": "student_id",
+    }
+
     out = df.rename(columns=rename_map).copy()
+
     required = ["student_name", "title", "group"]
     for col in required:
         if col not in out.columns:
             raise ValueError(f"学生ファイルに必須列がありません: {col}")
+
     for col in ["overview_field", "research_content", "research_field"]:
         if col not in out.columns:
             out[col] = ""
 
+    if "student_id" not in out.columns:
+        out["student_id"] = ""
+
     rows: List[Dict[str, object]] = []
+
     for _, row in out.iterrows():
+        student_name = normalize_text(row.get("student_name"))
+        student_id = normalize_student_id(row.get("student_id"))
+
         title = normalize_text(row.get("title"))
         content = normalize_text(row.get("research_content"))
         overview_fields = split_multi_value_text(row.get("overview_field"))
         base_fields = split_multi_value_text(row.get("research_field"))
-        coarse, detailed = infer_research_fields_from_texts([title, content, row.get("overview_field"), row.get("research_field")], include_coarse=False)
+
+        coarse, detailed = infer_research_fields_from_texts(
+            [title, content, row.get("overview_field"), row.get("research_field")],
+            include_coarse=False,
+        )
+
         detailed_fields = unique_keep_order(detailed)
         if not detailed_fields:
             detailed_fields = unique_keep_order(base_fields + overview_fields)
+
         rows.append({
-            "student_name": normalize_text(row.get("student_name")),
+            "student_name": student_name,
+            "student_id": student_id,
             "group": normalize_text(row.get("group")).upper(),
             "title": title,
             "overview_field": " ; ".join(overview_fields),
             "research_content": content,
-            "research_field": " ; ".join(unique_keep_order((base_fields if base_fields else overview_fields) + coarse)),
+            "research_field": " ; ".join(
+                unique_keep_order((base_fields if base_fields else overview_fields) + coarse)
+            ),
             "detailed_research_field": " ; ".join(detailed_fields),
-            "field_text": "\n".join(unique_keep_order(overview_fields + base_fields + coarse + detailed_fields)),
+            "field_text": "\n".join(
+                unique_keep_order(overview_fields + base_fields + coarse + detailed_fields)
+            ),
             "content_text": "\n".join([v for v in [title, content] if v]),
         })
+
     result = pd.DataFrame(rows)
-    result = result[(result["student_name"] != "") & (result["title"] != "") & (result["group"].isin(GROUPS))].copy()
+
+    result = result[
+        (result["student_name"] != "")
+        & (result["title"] != "")
+        & (result["group"].isin(GROUPS))
+    ].copy()
+
     return result.reset_index(drop=True)
 
 
