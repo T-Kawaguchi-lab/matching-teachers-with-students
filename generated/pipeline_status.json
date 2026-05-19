@@ -1,46 +1,46 @@
 {
-  "updated_at": "2026-05-19T07:45:42",
+  "updated_at": "2026-05-19T07:58:42",
   "teacher_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/teachers_latest.xlsx",
-    "modified_at": "2026-05-19T07:40:57",
-    "size_bytes": 11654
+    "modified_at": "2026-05-19T07:51:01",
+    "size_bytes": 6797
   },
   "student_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/students_latest.xlsx",
-    "modified_at": "2026-05-19T07:40:57",
+    "modified_at": "2026-05-19T07:51:01",
     "size_bytes": 16781
   },
   "master_title_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/data_sources/master_title.xlsx",
-    "modified_at": "2026-05-19T07:40:57",
+    "modified_at": "2026-05-19T07:51:01",
     "size_bytes": 41454
   },
   "students_count": 104,
-  "teachers_count": 74,
-  "scores_count": 3910,
+  "teachers_count": 80,
+  "scores_count": 4842,
   "recommendations_count": 104,
   "lookup_summary": {
-    "total": 38,
+    "total": 54,
     "by_status": {
-      "ok": 37,
-      "jglobal_not_found": 1
+      "ok_researchmap_fallback": 4,
+      "ok": 45,
+      "ok_jglobal_fallback": 5
     },
     "by_source": {
-      "trios": 37,
-      "jglobal": 1
+      "researchmap": 4,
+      "trios": 45,
+      "jglobal": 5
     },
-    "missing_teachers": [
-      "大西 正輝"
-    ]
+    "missing_teachers": []
   },
   "groups": {
     "MPPS": {
       "students": 83,
-      "teachers": 38
+      "teachers": 51
     },
     "MSE": {
       "students": 21,
-      "teachers": 36
+      "teachers": 29
     }
   },
   "note": "TRIOS取得は実行環境のネットワーク状況に依存します。失敗時はキャッシュまたは空欄で継続します。"
