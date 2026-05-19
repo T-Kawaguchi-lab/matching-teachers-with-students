@@ -230,8 +230,6 @@ def build_student_to_teacher_table(df: pd.DataFrame, selected_student: str) -> p
 
     keep_cols = [
         "順位",
-        "student_name",
-        "student_id",
         "teacher_name",
         "total_score",
         "field_score",
@@ -242,8 +240,6 @@ def build_student_to_teacher_table(df: pd.DataFrame, selected_student: str) -> p
     display_df = display_df[keep_cols].copy()
     display_df = display_df.rename(
         columns={
-            "student_name": "学生名",
-            "student_id": "学籍番号",
             "teacher_name": "教員名",
             "total_score": "total_score",
             "field_score": "field_score",
@@ -474,8 +470,14 @@ def main() -> None:
                         key=f"student_filter_{selected_group}",
                     )
 
-                    display_df = build_student_to_teacher_table(weighted_scores_df, selected_student)
-                    current_display_df = display_df.copy()
+                    display_df = build_student_to_teacher_table(
+                        weighted_scores_df,
+                        selected_student,
+                    )
+
+                    current_display_df = weighted_scores_df[
+                        weighted_scores_df["student_name"].astype(str) == str(selected_student)
+                    ].copy()
                     current_selected_name = str(selected_student)
                     current_selected_kind = "student"
 
