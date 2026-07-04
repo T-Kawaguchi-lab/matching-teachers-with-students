@@ -1,44 +1,44 @@
 {
-  "updated_at": "2026-07-04T13:04:35",
+  "updated_at": "2026-07-04T22:53:20",
   "teacher_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/teachers_latest.xlsx",
-    "modified_at": "2026-07-04T12:59:58",
-    "size_bytes": 11000
+    "modified_at": "2026-07-04T22:46:16",
+    "size_bytes": 6477
   },
   "student_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/students_latest.xlsx",
-    "modified_at": "2026-07-04T12:59:58",
+    "modified_at": "2026-07-04T22:46:16",
     "size_bytes": 17804
   },
   "master_title_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/data_sources/master_title.xlsx",
-    "modified_at": "2026-07-04T12:59:58",
+    "modified_at": "2026-07-04T22:46:16",
     "size_bytes": 41454
   },
   "students_count": 107,
-  "teachers_count": 62,
-  "scores_count": 3317,
+  "teachers_count": 110,
+  "scores_count": 5885,
   "recommendations_count": 107,
   "lookup_summary": {
-    "total": 31,
+    "total": 55,
     "by_status": {
-      "ok": 29,
-      "ok_researchmap_fallback": 2
+      "ok": 49,
+      "ok_researchmap_fallback": 6
     },
     "by_source": {
-      "trios": 29,
-      "researchmap": 2
+      "trios": 49,
+      "researchmap": 6
     },
     "missing_teachers": []
   },
   "groups": {
     "MPPS": {
       "students": 85,
-      "teachers": 31
+      "teachers": 55
     },
     "MSE": {
       "students": 22,
-      "teachers": 31
+      "teachers": 55
     }
   },
   "note": "TRIOS取得は実行環境のネットワーク状況に依存します。失敗時はキャッシュまたは空欄で継続します。"
