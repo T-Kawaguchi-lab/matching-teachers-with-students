@@ -1,50 +1,44 @@
 {
-  "updated_at": "2026-07-04T05:53:53",
+  "updated_at": "2026-07-04T12:48:56",
   "teacher_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/teachers_latest.xlsx",
-    "modified_at": "2026-07-04T05:48:14",
-    "size_bytes": 11839
+    "modified_at": "2026-07-04T12:44:43",
+    "size_bytes": 11029
   },
   "student_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/incoming/students_latest.xlsx",
-    "modified_at": "2026-07-04T05:48:14",
+    "modified_at": "2026-07-04T12:44:43",
     "size_bytes": 17804
   },
   "master_title_input": {
     "path": "/home/runner/work/matching-teachers-with-students/matching-teachers-with-students/data_sources/master_title.xlsx",
-    "modified_at": "2026-07-04T05:48:13",
+    "modified_at": "2026-07-04T12:44:43",
     "size_bytes": 41454
   },
   "students_count": 107,
-  "teachers_count": 108,
-  "scores_count": 5778,
+  "teachers_count": 37,
+  "scores_count": 2578,
   "recommendations_count": 107,
   "lookup_summary": {
-    "total": 54,
+    "total": 31,
     "by_status": {
-      "ok": 49,
-      "jglobal_not_found": 5
+      "ok": 29,
+      "ok_researchmap_fallback": 2
     },
     "by_source": {
-      "trios": 49,
-      "jglobal": 5
+      "trios": 29,
+      "researchmap": 2
     },
-    "missing_teachers": [
-      "阿武 秀和",
-      "張 勇兵",
-      "石井 儀光",
-      "大西 正輝",
-      "山野 博哉"
-    ]
+    "missing_teachers": []
   },
   "groups": {
     "MPPS": {
       "students": 85,
-      "teachers": 54
+      "teachers": 28
     },
     "MSE": {
       "students": 22,
-      "teachers": 54
+      "teachers": 9
     }
   },
   "note": "TRIOS取得は実行環境のネットワーク状況に依存します。失敗時はキャッシュまたは空欄で継続します。"
